@@ -1119,7 +1119,7 @@ html:not([data-boot]) .bootfail{display:block;visibility:hidden;animation:bootsh
  * ==================================================================== */
 var WCR = (function () {
   'use strict';
-  var VERSION = '3.7.0';
+  var VERSION = '3.7.1';
   var SCHEMA = 3;
   var PBKDF2_ITER = 150000;
   var POW_BITS = 16;
@@ -2677,9 +2677,16 @@ var BADGE_UI = (function () {
  */
 var BIRDS = (function () {
   'use strict';
+  /** มีไฟล์ภาพวางคู่หน้าเว็บไหม: เปิดนอก Apps Script (GitHub Pages) และกำหนดที่อยู่ระบบหลังบ้านไว้ */
+  function localAssets() {
+    if (typeof google !== 'undefined' && google.script) return false;
+    var m = document.querySelector('meta[name="kps-api"]'); return !!(m && m.content);
+  }
   function remoteUrl(file, w) { return 'https:\/\/commons.wikimedia.org/wiki/Special:FilePath/' + encodeURIComponent(file.replace(/ /g, '_')) + '?width=' + (w || 480); }
   /** ขนาดเล็ก (<=700px) ใช้ภาพฝัง ขนาดใหญ่ใช้ Commons */
-  function photoUrl(file, w) { return (w && w > 700) ? remoteUrl(file, w) : (embedded(file) || remoteUrl(file, w)); }
+  /** ภาพย่อที่ครอปแล้ว: บน GitHub Pages เป็นไฟล์ ph-*.jpg วางคู่ index.html (เปิดผ่าน Apps Script จะใช้ภาพจาก Commons แทน) */
+  function localThumb(file) { return localAssets() ? 'ph-' + String(file).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') + '.jpg' : ''; }
+  function photoUrl(file, w) { return (w && w > 700) ? remoteUrl(file, w) : (embedded(file) || localThumb(file) || remoteUrl(file, w)); }
   function filePage(file) { return 'https:\/\/commons.wikimedia.org/wiki/File:' + encodeURIComponent(file.replace(/ /g, '_')); }
 
   /** ภาพจริงของชนิดในฟอร์มรายงาน */
@@ -2822,7 +2829,7 @@ var BIRDS = (function () {
   };
   function embedded(file) { return EMBED[file] || ''; }
   function credit(file) { var c = CREDIT[file]; return c ? { by: c[0], lic: c[1] } : null; }
-  return { LIST: LIST, ANIMALS: ANIMALS, SOURCES: SOURCES, FORM_PHOTOS: FORM_PHOTOS, photoUrl: photoUrl, remoteUrl: remoteUrl, embedded: embedded, credit: credit, filePage: filePage };
+  return { LIST: LIST, ANIMALS: ANIMALS, SOURCES: SOURCES, FORM_PHOTOS: FORM_PHOTOS, photoUrl: photoUrl, remoteUrl: remoteUrl, embedded: embedded, credit: credit, filePage: filePage, localAssets: localAssets };
 })();
 
 </script>
@@ -4019,6 +4026,7 @@ const SAT = {
 const SAT_EMBED = {};
 function satSrc(v) {
   const s = SAT[v]; if (SAT_EMBED[v]) return SAT_EMBED[v];
+  if (BIRDS.localAssets()) return 'sat-' + v + '.jpg'; /* GitHub Pages: ไฟล์ภาพวางคู่หน้าเว็บ */
   return 'https:\/\/server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=' + s.b.join(',') +
     '&bboxSR=4326&imageSR=4326&size=' + s.w + ',' + s.h + '&format=jpg&f=image';
 }
