@@ -1119,7 +1119,7 @@ html:not([data-boot]) .bootfail{display:block;visibility:hidden;animation:bootsh
  * ==================================================================== */
 var WCR = (function () {
   'use strict';
-  var VERSION = '3.7.2';
+  var VERSION = '3.7.3';
   var SCHEMA = 3;
   var PBKDF2_ITER = 150000;
   var POW_BITS = 16;
@@ -2550,22 +2550,32 @@ var WCR = (function () {
       return rows.length + gone + oldPh.length;
     }
     /** นำเข้าข้อมูลเดิม (Google Form) เป็นรายงานไม่ระบุตัวตน — ข้ามรายการที่มี id อยู่แล้ว */
+    /** คีย์ของแถวจากแบบฟอร์มเดิม = เวลาประทับ (ms) + ลำดับรายการในแถว — ไม่ขึ้นกับข้อความในแถว
+     *  (ถ้าแก้วิธีแปลงข้อมูล รหัสส่วนท้ายอาจเปลี่ยน แต่ยังจับคู่กับแถวเดิมได้ ไม่เกิดรายการซ้ำ) */
+    function histKey(id) { id = String(id); return id.length > 4 ? id.slice(0, -3) + id.slice(-1) : id; }
+    var HIST_FIELDS = ['date', 'time', 'category', 'speciesKey', 'species', 'sizeClass', 'quantity', 'locKey', 'altitude'];
+    /** นำเข้าข้อมูลจากแบบฟอร์มเดิม: เพิ่มรายการที่ยังไม่มี + แก้รายการเดิมที่แปลงผิด (เฉพาะแถวจากแบบฟอร์ม ไม่แตะรายงานจากแอป)
+     *  รายการที่อยู่ในถังกู้คืน (ตั้งใจลบ) จะไม่ถูกเพิ่มกลับ */
     function importRows(list) {
-      var have = {}; env.rows('Reports').forEach(function (r) { have[String(r.id)] = 1; });
-      env.rows('Deleted').forEach(function (r) { have[String(r.id)] = 1; });
-      var c = cfg(), added = 0, bad = 0, out = [];
+      var live = {}, gone = {};
+      env.rows('Reports').forEach(function (r) { live[histKey(r.id)] = r; });
+      env.rows('Deleted').forEach(function (r) { gone[histKey(r.id)] = 1; });
+      var c = cfg(), added = 0, fixed = 0, bad = 0, out = [], fix = {};
       list.forEach(function (a) {
-        if (have[a[0]]) return;
+        var k = histKey(a[0]), cur = live[k];
+        if (gone[k] || (cur && cur.deviceId !== 'history')) return;
         try {
           var row = buildReport({ category: a[3], speciesKey: a[4], sizeClass: a[5], customName: a[6], quantity: a[7], locKey: a[8], altitudeIdx: a[9] },
-            { config: c, id: a[0], createdAt: a[1] + 'T' + a[2] + ':00+07:00', date: a[1], time: a[2], reporterId: '', reporterName: 'ไม่ระบุตัวตน', deviceId: 'history', history: true });
-          have[a[0]] = 1; out.push(row); added++;
+            { config: c, id: cur ? String(cur.id) : a[0], createdAt: a[1] + 'T' + a[2] + ':00+07:00', date: a[1], time: a[2], reporterId: '', reporterName: 'ไม่ระบุตัวตน', deviceId: 'history', history: true });
+          if (!cur) { live[k] = row; out.push(row); added++; return; }
+          if (HIST_FIELDS.some(function (f) { return String(cur[f]) !== String(row[f]); })) { fix[String(cur.id)] = row; fixed++; }
         } catch (e) { bad++; }
       });
       /* เขียนครั้งเดียวทั้งก้อน (เร็วกว่าเขียนทีละแถวมาก) */
-      if (env.appendMany) env.appendMany('Reports', out); else out.forEach(function (r) { env.append('Reports', r); });
-      if (added) { env.sortById('Reports'); bump('REV_FULL'); audit('importHistory', 'system', added + ' rows'); }
-      return { added: added, skipped: list.length - added - bad, bad: bad };
+      if (out.length) { if (env.appendMany) env.appendMany('Reports', out); else out.forEach(function (r) { env.append('Reports', r); }); }
+      if (fixed) env.update('Reports', function (r) { return !!fix[String(r.id)]; }, function (r) { var n = fix[String(r.id)]; for (var f in n) if (f !== 'id') r[f] = n[f]; });
+      if (added || fixed) { if (added) env.sortById('Reports'); bump('REV_FULL'); audit('importHistory', 'system', added + ' added · ' + fixed + ' fixed'); }
+      return { added: added, fixed: fixed, skipped: list.length - added - fixed - bad, bad: bad };
     }
 
     function handle(req) {
