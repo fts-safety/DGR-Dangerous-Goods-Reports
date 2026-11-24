@@ -1119,7 +1119,7 @@ html:not([data-boot]) .bootfail{display:block;visibility:hidden;animation:bootsh
  * ==================================================================== */
 var WCR = (function () {
   'use strict';
-  var VERSION = '3.7.1';
+  var VERSION = '3.7.2';
   var SCHEMA = 3;
   var PBKDF2_ITER = 150000;
   var POW_BITS = 16;
@@ -1747,7 +1747,7 @@ var WCR = (function () {
     if (/final|ไฟนอล|outer marker/.test(t)) return { key: cir('FINAL') };
     if (/base|เบส/.test(t)) return { key: cir('BASE') };
     if (/crosswind|cross wind/.test(t)) return { key: cir('CROSSWIND') };
-    var dw = /down ?win|dowind|dowwind|d\/w|ดาวน์วินด์|ดาววิน/.test(t);
+    var dw = /down ?win|dowind|dowwind|doen ?w|d\/w|\bdw\b|ดาวน์วินด์|ดาววิน/.test(t);
     if (dw && /outside/.test(t)) return { key: cir('DW_OUTSIDE') };
     if (dw && /close/.test(t)) return { key: cir('DW_CLOSED') };
     if (dw && /long/.test(t)) return { key: cir('DW_LONG') };
@@ -1758,8 +1758,9 @@ var WCR = (function () {
     tr = tr || /(?:^|\s)(\d)([nsw])(?![a-z])/.exec(t);
     if (tr) { var v = tr[1] + (tr[2] ? tr[2].toUpperCase() : ''); if (parseLoc('TR:' + v)) return { key: 'TR:' + v }; if (parseLoc('TR:' + tr[1] + 'N')) return { key: 'TR:' + tr[1] + 'N' }; }
     if (/initial|intial/.test(t)) return { key: 'RP:IAF' };
-    if (/\bc ?point/.test(t)) return { key: 'RP:C' };
-    if (/\bp ?point/.test(t)) return { key: 'RP:P' };
+    if (/mid ?field/.test(t)) return { key: cir('RUNWAY') };
+    if (/\bc[ .]?point/.test(t)) return { key: 'RP:C' };
+    if (/\bp[ .]?point/.test(t)) return { key: 'RP:P' };
     if (/\biaf\b/.test(t)) return { key: 'RP:IAF' };
     if (/point/.test(t)) return { key: 'RP:C' };
     if (/ค่ายพัก|ทะเลสาบ|อู่ทอง|กฝบ|ห้องเตรียมบิน|\d\s*nm\b|\bnm\b|radial|\br-?\d{3}\/\d/.test(t)) return { key: 'AROUND' };
@@ -1816,7 +1817,7 @@ var WCR = (function () {
     Deleted: [],
     Users: ['id', 'username', 'usernameLower', 'salt', 'pwHash', 'gender', 'rank', 'firstName', 'lastName', 'navy', 'nickname',
       'role', 'roleVerified', 'spClass', 'pitClass', 'roleOther', 'piiEnc', 'createdAt', 'updatedAt', 'failCount', 'lockUntil', 'active', 'badgePick', 'tutorial'],
-    Photos: ['userId', 'data', 'updatedAt'],
+    Photos: ['userId', 'data', 'updatedAt', 'data2'],
     Devices: ['tokenHash', 'userId', 'deviceId', 'infoEnc', 'createdAt', 'lastSeen', 'revoked'],
     Issues: ['id', 'createdAt', 'category', 'severity', 'description', 'reporterName', 'snapshot', 'status', 'devNote', 'updatedAt'],
     Releases: ['id', 'createdAt', 'version', 'notes', 'fileId', 'bytes', 'uploadedBy'],
@@ -1833,7 +1834,7 @@ var WCR = (function () {
   var ISSUE_STATUS = { UNREAD: 'ยังไม่อ่าน', ACCEPTED: 'รับเรื่องไปแก้ไข', URGENT: 'เร่งด่วน', FIXED: 'แก้ไขแล้ว' };
   var ANON_DAYS = 30;
   var READ_ACTIONS = { bootstrap: 1, challenge: 1, status: 1, getData: 1, whoIs: 1, usernameFree: 1, resume: 1, photos: 1, devStatus: 1, devOverview: 1, reportPhoto: 1, devPhotos: 1 };
-  var PHOTO_KEEP_DAYS = 365;
+  var PHOTO_KEEP_DAYS = 365, PHOTO_CELL = 48000;
   var DEVICE_TTL_DAYS = 180;
 
   function createServer(env) {
@@ -2140,7 +2141,7 @@ var WCR = (function () {
       ids.forEach(function (i) { var v = got[key(i)]; if (v) out[i] = { data: v, updatedAt: revs[i] }; else { miss[i] = 1; nMiss++; } });
       if (nMiss) {
         var put = {};
-        env.rows('Photos').forEach(function (p) { if (miss[p.userId] && p.data) { out[p.userId] = { data: p.data, updatedAt: p.updatedAt }; put['pho|' + p.userId + '|' + p.updatedAt] = p.data; } });
+        env.rows('Photos').forEach(function (p) { if (miss[p.userId] && p.data) { var full = String(p.data) + String(p.data2 || ''); out[p.userId] = { data: full, updatedAt: p.updatedAt }; put['pho|' + p.userId + '|' + p.updatedAt] = full; } });
         if (env.cachePutAll) { try { env.cachePutAll(put, 21600); } catch (e) { /* ข้าม */ } }
       }
       return { photos: out };
@@ -2222,10 +2223,12 @@ var WCR = (function () {
     A.setPhoto = function (q) {
       var u = auth(q.token, true), data = String(q.data || '');
       rate('ph|' + u.id, 10, 3600);
-      if (data && (!/^data:image\/jpeg;base64,[A-Za-z0-9+\/=]+$/.test(data) || data.length > 49000)) throw err('รูปต้องเป็น JPEG ขนาดไม่เกิน ~36 KB');
+      if (data && (!/^data:image[/]jpeg;base64,[A-Za-z0-9+/=]+$/.test(data) || data.length > 97000)) throw err('รูปต้องเป็น JPEG ขนาดไม่เกิน ~70 KB');
+      /* 1 เซลล์ชีทเก็บได้ไม่เกิน 50,000 ตัวอักษร → แบ่งเก็บ 2 ช่อง (data + data2) */
+      var d1 = data.slice(0, PHOTO_CELL), d2 = data.slice(PHOTO_CELL);
       var t = nowIso();
-      var n = env.update('Photos', function (x) { return x.userId === u.id; }, function (x) { x.data = data; x.updatedAt = t; });
-      if (!n) env.append('Photos', { userId: u.id, data: data, updatedAt: t });
+      var n = env.update('Photos', function (x) { return x.userId === u.id; }, function (x) { x.data = d1; x.data2 = d2; x.updatedAt = t; });
+      if (!n) env.append('Photos', { userId: u.id, data: d1, data2: d2, updatedAt: t });
       bump('REV_USERS');
       return { updatedAt: t };
     };
@@ -2910,7 +2913,7 @@ eyeify();
 function askPasscode(title, desc, extra, onSubmit) {
   const m = modal({
     title, body: `<p class="sub">${desc}</p>${extra || ''}<label class="f" for="pcIn">${ic('lock')} รหัสยืนยัน</label>
-      <input class="in" id="pcIn" type="password" autocomplete="off" autofocus><div class="err" id="pcErr"></div>`,
+      <input class="in" id="pcIn" type="password" name="kps-passcode" autocomplete="one-time-code" data-1p-ignore data-lpignore="true" autocapitalize="off" spellcheck="false" autofocus><div class="err" id="pcErr"></div>`,
     foot: `<button class="btn" type="button" data-close>ยกเลิก</button><button class="btn pri" type="button" id="pcOk">ยืนยัน</button>`
   });
   const go = async () => {
@@ -3298,8 +3301,8 @@ const HIST_DEMO = [["R1697588929000910","2023-10-18","07:15","ANIMAL","dog","L",
   ["R1793171280000080","2026-10-28","12:30","BIRD","openbill","L","",10,"RP:C",0],
   ["R1793171385000330","2026-10-28","13:13","BIRD","lapwing","M","",5,"CIR:03:BASE",0],
   ["R1793171512000050","2026-10-28","13:03","BIRD","hawk","M","",2,"CIR:03:BASE",0],
-  ["R1793260509000820","2026-10-29","10:45","BIRD","lapwing","M","",8,"RP:C",0],
-  ["R1794380039000390","2026-11-11","13:47","BIRD","openbill","L","",1,"RP:C",0],
+  ["R1793260509000820","2026-10-29","10:45","BIRD","lapwing","M","",8,"RP:P",0],
+  ["R1794380039000390","2026-11-11","13:47","BIRD","openbill","L","",1,"CIR:03:RUNWAY",0],
   ["R1794383759000200","2026-11-11","14:54","BIRD","lapwing","M","",5,"CIR:03:FINAL",0],
   ["R1794446745000870","2026-11-12","08:25","BIRD","lapwing","M","",40,"CIR:21:RUNWAY",0],
   ["R1794451267000460","2026-11-12","09:30","ANIMAL","dog","L","",4,"CIR:03:RUNWAY",0],
@@ -3319,7 +3322,17 @@ const HIST_DEMO = [["R1697588929000910","2023-10-18","07:15","ANIMAL","dog","L",
   ["R1795144023000500","2026-11-20","09:27","BIRD","lapwing","M","",20,"CIR:03:RUNWAY",0],
   ["R1795144073000510","2026-11-20","09:33","BIRD","lapwing","M","",10,"CIR:03:FINAL",0],
   ["R1795145038000580","2026-11-20","10:20","ANIMAL","snake","M","",1,"TWY:E",0],
-  ["R1795145230000280","2026-11-20","10:19","BIRD","lapwing","M","",1,"CIR:03:BASE",0]];
+  ["R1795145230000280","2026-11-20","10:19","BIRD","lapwing","M","",1,"CIR:03:BASE",0],
+  ["R1795395035000840","2026-11-23","07:45","BIRD","lapwing","M","",50,"CIR:03:RUNWAY",0],
+  ["R1795403845000920","2026-11-23","08:28","BIRD","lapwing","M","",30,"TWY:A",0],
+  ["R1795410414000450","2026-11-23","10:15","BIRD","lapwing","M","",10,"CIR:03:RUNWAY",0],
+  ["R1795410447000080","2026-11-23","11:04","BIRD","lapwing","M","",20,"CIR:03:DW_CLOSED",0],
+  ["R1795410481000090","2026-11-23","11:50","BIRD","lapwing","M","",20,"CIR:03:DW_CLOSED",0],
+  ["R1795484139000960","2026-11-24","07:41","BIRD","lapwing","M","",30,"CIR:21:RUNWAY",0],
+  ["R1795484989000160","2026-11-24","08:40","BIRD","lapwing","M","",15,"CIR:03:FINAL",0],
+  ["R1795486440000830","2026-11-24","09:13","BIRD","lapwing","M","",15,"CIR:03:RUNWAY",0],
+  ["R1795493806000780","2026-11-24","10:40","BIRD","lapwing","M","",30,"CIR:03:DW_MID",0],
+  ["R1795498437000500","2026-11-24","12:33","BIRD","lapwing","M","",50,"CIR:03:DW_LONG",0]];
 function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 function pickW(r, items) { const tot = items.reduce((s, x) => s + x[1], 0); let v = r() * tot; for (const x of items) { v -= x[1]; if (v <= 0) return x[0]; } return items[items.length - 1][0]; }
 
@@ -3469,7 +3482,15 @@ function badgeObj(uid) { const u = S.users[uid]; return W.shownBadge(countOf(uid
 function badgeOf(uid) { return BADGE_UI.pill(badgeObj(uid), countOf(uid)); }
 function nameHtml(uid) { const u = S.users[uid]; return u ? esc(W.shortName(u)) + badgeOf(uid) : (uid ? 'ผู้ใช้ที่ถูกระงับ' : 'ไม่ระบุตัวตน'); }
 const PHOTOS = (() => { try { return JSON.parse(LS.get('kpswcr_photos') || '{}'); } catch (e) { return {}; } })();
-function savePhotos() { LS.set('kpswcr_photos', JSON.stringify(PHOTOS)); }
+/** เก็บรูปโปรไฟล์ในเครื่อง — ถ้าพื้นที่เต็ม ทิ้งรูปเก่าครึ่งหนึ่งแล้วลองใหม่ (โหลดใหม่จากระบบได้เสมอ) */
+function savePhotos() {
+  for (let i = 0; i < 6; i++) {
+    if (LS.set('kpswcr_photos', JSON.stringify(PHOTOS))) return;
+    const ks = Object.keys(PHOTOS).sort((a, b) => String(PHOTOS[a].updatedAt).localeCompare(String(PHOTOS[b].updatedAt)));
+    if (!ks.length) return;
+    ks.slice(0, Math.ceil(ks.length / 2)).forEach(k => { if (!S.user || k !== S.user.id) delete PHOTOS[k]; });
+  }
+}
 async function ensurePhotos(uids) {
   const need = uids.filter(u => S.photoRevs[u] && (!PHOTOS[u] || PHOTOS[u].updatedAt !== S.photoRevs[u])).slice(0, 40);
   if (!need.length) return;
@@ -3849,9 +3870,9 @@ function circuitSvg(rwy) {
   const SG = [ // จุดเรียงตามทิศการบินของ RWY 03 (RWY 21 กลับทิศ) — ขา Crosswind/Base สั้นลง (Downwind ขยับเข้าใกล้ RWY)
     ['UP03|FIN21', [[278, 211], [350, 211]], [314, 236, 'middle']],
     ['SIDE_A', [[356, 204], [356, 128]], [346, 168, 'end']],
-    ['DW_Y', [[352, 122], [252, 122]], [302, 143, 'middle']],
+    ['DW_X', [[352, 122], [252, 122]], [302, 143, 'middle']],
     ['DW_MID', [[252, 122], [152, 122]], [202, 143, 'middle']],
-    ['DW_X', [[152, 122], [30, 122]], [92, 143, 'middle']],
+    ['DW_Y', [[152, 122], [30, 122]], [92, 143, 'middle']],
     ['SIDE_B', [[24, 128], [24, 204]], [34, 168, 'start']],
     ['FIN03|UP21', [[30, 211], [102, 211]], [66, 236, 'middle']],
     ['DW_CLOSED', [[300, 168], [80, 168]], [190, 184, 'middle']],
@@ -4813,6 +4834,7 @@ function deleteReports(ids) {
     async ({ pass, extra }) => {
       const r = await api('deleteReports', { passHash: await pbkdf2Hex(pass, SALT.del), ids, reason: extra.reason, deviceId: deviceId(), token: S.token });
       if (!r.ok) return r.error;
+      if (!r.deleted.length) { sync(true); return 'ไม่พบรายการนี้ในฐานข้อมูล (อาจถูกลบจากเครื่องอื่นหรือในชีทไปแล้ว) — กำลังโหลดข้อมูลใหม่'; }
       const del = new Set(r.deleted); S.reports = S.reports.filter(x => !del.has(x.id)); del.forEach(i => LOG.sel.delete(i));
       dataChanged(); toast(`ลบแล้ว ${r.deleted.length} รายการ`, 'ok');
     });
@@ -4939,8 +4961,18 @@ function formatSP(v) {
 }
 function formatPIT(v) { const d = String(v || '').toUpperCase().replace(/^PIT/, '').replace(/\D/g, '').slice(0, 2); return d ? 'PIT' + d : ''; }
 
-/** ครอปรูปโปรไฟล์เอง: ลากเลื่อน + ซูม แล้วบันทึกเป็น JPEG 320×320 (ตัดข้อมูล EXIF ทิ้งโดยอัตโนมัติ) — คืนค่า null เมื่อยกเลิก */
-const PHOTO_PX = 320, PHOTO_MAX_CHARS = 48000;
+/** ครอปรูปโปรไฟล์เอง: ลากเลื่อน + ซูม แล้วบันทึกเป็น JPEG 512×512 (ตัดข้อมูล EXIF ทิ้งโดยอัตโนมัติ) — คืนค่า null เมื่อยกเลิก */
+const PHOTO_PX = 512, PHOTO_MAX_CHARS = 96000;
+/** ย่อรูปแบบคุณภาพสูง: ลดครึ่งทีละขั้นจนใกล้ขนาดที่ต้องใช้ (ภาพคมกว่าย่อทีเดียว) */
+function hqSource(img, needW) {
+  let src = img, w = img.width, h = img.height;
+  while (w / 2 >= needW && w > 2) {
+    w = Math.round(w / 2); h = Math.round(h / 2);
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const x = c.getContext('2d'); x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'high'; x.drawImage(src, 0, 0, w, h); src = c;
+  }
+  return src;
+}
 function cropPhoto(file) {
   return new Promise((resolve, reject) => {
     if (!/^image[/]/.test(file.type)) return reject(new Error('ต้องเป็นไฟล์รูปภาพ'));
@@ -4958,7 +4990,7 @@ function cropPhoto(file) {
         onClose: () => { URL.revokeObjectURL(url); if (!done) resolve(null); } });
       const cv = m.q('#cpC'), ctx = cv.getContext('2d');
       const clamp = () => { const w = img.width * base * zoom, h = img.height * base * zoom, mx = (w - V) / 2, my = (h - V) / 2; ox = Math.max(-mx, Math.min(mx, ox)); oy = Math.max(-my, Math.min(my, oy)); };
-      const paint = (c, k) => { const w = img.width * base * zoom * k, h = img.height * base * zoom * k; c.fillStyle = '#fff'; c.fillRect(0, 0, V * k, V * k); c.drawImage(img, V * k / 2 - w / 2 + ox * k, V * k / 2 - h / 2 + oy * k, w, h); };
+      const paint = (c, k) => { const w = img.width * base * zoom * k, h = img.height * base * zoom * k; c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high'; c.fillStyle = '#fff'; c.fillRect(0, 0, V * k, V * k); c.drawImage(hqSource(img, w), V * k / 2 - w / 2 + ox * k, V * k / 2 - h / 2 + oy * k, w, h); };
       const draw = () => { clamp(); paint(ctx, 1); };
       draw();
       let drag = null;
@@ -4972,8 +5004,8 @@ function cropPhoto(file) {
       m.q('#cpOk').onclick = () => {
         const out = document.createElement('canvas'); out.width = out.height = PHOTO_PX;
         const k = PHOTO_PX / V; clamp(); paint(out.getContext('2d'), k);
-        let q = 0.9, d = out.toDataURL('image/jpeg', q);
-        while (d.length > PHOTO_MAX_CHARS && q > 0.4) { q -= 0.07; d = out.toDataURL('image/jpeg', q); }
+        let q = 0.92, d = out.toDataURL('image/jpeg', q);
+        while (d.length > PHOTO_MAX_CHARS && q > 0.45) { q -= 0.06; d = out.toDataURL('image/jpeg', q); }
         if (d.length > PHOTO_MAX_CHARS + 1000) return toast('รูปมีรายละเอียดมากเกินไป ลองรูปอื่นหรือซูมเข้า', 'bad');
         done = true; m.close(); resolve(d);
       };
@@ -4984,7 +5016,7 @@ function cropPhoto(file) {
 function photoPicker(cur) {
   return `<div class="photo-pick"><span class="av md" id="phPrev">${cur ? `<img src="${esc(cur)}" alt="">` : ic('camera')}</span>
     <div><label class="btn sm" for="phFile">${ic('camera')}เลือกรูปของตนเอง</label><input type="file" id="phFile" accept="image/\u002a" class="hp">
-    <div class="hint">เลือกรูปแล้วลากจัดตำแหน่ง/ซูมเองได้ — ระบบย่อเป็น 320×320 พิกเซลในเครื่องนี้ก่อนส่ง (ตัดข้อมูลพิกัด/EXIF ออกอัตโนมัติ) · แสดงใน Top Reporter และโปรไฟล์ (แตะเพื่อขยาย)</div></div></div>`;
+    <div class="hint">เลือกรูปแล้วลากจัดตำแหน่ง/ซูมเองได้ — ระบบย่อเป็น 512×512 พิกเซลในเครื่องนี้ก่อนส่ง (ตัดข้อมูลพิกัด/EXIF ออกอัตโนมัติ) · แสดงใน Top Reporter และโปรไฟล์ (แตะเพื่อขยาย)</div></div></div>`;
 }
 function bindPhotoPicker(m, onPick) {
   m.q('#phFile').onchange = async e => {
