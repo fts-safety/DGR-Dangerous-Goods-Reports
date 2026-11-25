@@ -2,6 +2,8 @@
 <!-- KPS-WCR-APP v2.4 : Wildlife Condition Report — Kamphaeng Saen Aerodrome -->
 <html lang="th">
 <head>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https://*.wikimedia.org https://server.arcgisonline.com; connect-src 'self' https://script.google.com https://script.googleusercontent.com https://api.ipify.org; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <!-- ที่อยู่ระบบหลังบ้าน (Apps Script /exec) — ใช้เมื่อเปิดหน้าเว็บนอก Apps Script เช่น GitHub Pages · เปิดผ่าน Apps Script จะไม่ใช้ค่านี้ -->
 <meta name="kps-api" content="https://script.google.com/macros/s/AKfycbwVEgqowqyDKisufK5WR-0yQ6zdIoXxsu30oLpnt86dxo2J98lubqmwH3CPeaUiMFFs/exec">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -23,7 +25,8 @@ window.__bootShow = function (m) {
 /* เบราว์เซอร์รองรับไหม: IE / เบราว์เซอร์รุ่นเก่า (ก่อน Safari 14 / iOS 14, Chrome 80, Firefox 74) รันแอปไม่ได้ */
 window.__oldBrowser = (function () {
   if (document.documentMode || /MSIE |Trident[/]/.test(navigator.userAgent)) return 'ie';
-  try { new Function('async () => { const o = { ...{ a: 1 } }; return o?.a ?? 0; }'); } catch (x) { return 'old'; }
+  /* SyntaxError = ไวยากรณ์ใหม่ไม่รองรับ · EvalError = นโยบายความปลอดภัย (CSP) ห้าม new Function ซึ่งไม่ใช่เบราว์เซอร์เก่า */
+  try { new Function('async () => { const o = { ...{ a: 1 } }; return o?.a ?? 0; }'); } catch (x) { if (x instanceof SyntaxError) return 'old'; }
   if (!window.Promise || !window.fetch || !window.TextEncoder || !window.crypto || !window.crypto.subtle) return 'old';
   return '';
 })();
@@ -1119,7 +1122,7 @@ html:not([data-boot]) .bootfail{display:block;visibility:hidden;animation:bootsh
  * ==================================================================== */
 var WCR = (function () {
   'use strict';
-  var VERSION = '3.7.3';
+  var VERSION = '3.7.4';
   var SCHEMA = 3;
   var PBKDF2_ITER = 150000;
   var POW_BITS = 16;
@@ -2863,10 +2866,11 @@ const LS = {
 function bkk(d) { const x = new Date((d ? d.getTime() : Date.now()) + 7 * 3600e3).toISOString(); return { date: x.slice(0, 10), time: x.slice(11, 16) }; }
 const hex = b => Array.from(b, x => (x < 16 ? '0' : '') + x.toString(16)).join('');
 const utf8 = s => new TextEncoder().encode(String(s));
+/* ไลบรารีกราฟจาก CDN + ค่า integrity (SRI): ถ้าไฟล์บน CDN ถูกแก้ไขแม้แต่ 1 ตัวอักษร เบราว์เซอร์จะไม่รันไฟล์นั้น */
 const CHART_SRC = [
-  'https:\/\/cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js',
-  'https:\/\/cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js',
-  'https:\/\/cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js'
+  ['https:\/\/cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js', 'sha384-bs/nf9FbdNouRbMiFcrcZfLXYPKiPaGVGplVbv7dLGECccEXDW+S3zjqSKR5ZEaD'],
+  ['https:\/\/cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js', 'sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG'],
+  ['https:\/\/cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js', 'sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG']
 ];
 
 /* ========================= toast / modal ========================= */
@@ -3464,19 +3468,35 @@ async function seedDemo() {
 const API = { mode: 'demo', url: '', fixed: false, srv: null, ready: null, setReady: null };
 /* โหมดสาธิต: คำขอที่มาก่อนสร้างข้อมูลตัวอย่างเสร็จ (เปิดครั้งแรก) ต้องรอ — กัน API.srv ยังเป็น null บน Safari */
 API.ready = new Promise(r => { API.setReady = r; });
-function api(action, q) {
-  const req = Object.assign({ action }, q || {});
+/* คำสั่งอ่านอย่างเดียว — ลองใหม่อัตโนมัติได้เสมอเมื่อเชื่อมต่อไม่สำเร็จ */
+const READ_ACT = new Set(['bootstrap', 'challenge', 'status', 'getData', 'whoIs', 'usernameFree', 'resume', 'photos', 'devStatus', 'devOverview', 'reportPhoto', 'devPhotos']);
+/* Google จำกัดสคริปต์ทำงานพร้อมกัน ~30 รายการต่อบัญชี — เกินแล้วตอบเป็นหน้า HTML แจ้งข้อผิดพลาด (คำสั่งยังไม่ถูกรัน จึงลองใหม่ได้ปลอดภัย) */
+const BUSY_RE = /too many simultaneous|simultaneous invocations|invoked too many times|พร้อมกันหลายรายการ/i;
+const BUSY_MSG = 'ขณะนี้มีผู้ใช้งานพร้อมกันจำนวนมาก กรุณาลองใหม่อีกครั้ง';
+function api1(req) {
   if (API.mode === 'gas') {
     return new Promise(res => google.script.run
       .withSuccessHandler(s => { try { res(JSON.parse(s)); } catch (e) { res({ ok: false, error: 'คำตอบจากเซิร์ฟเวอร์ไม่ถูกต้อง' }); } })
-      .withFailureHandler(e => res({ ok: false, error: String((e && e.message) || e), code: 'NET' }))
+      .withFailureHandler(e => { const m = String((e && e.message) || e); res(BUSY_RE.test(m) ? { ok: false, error: BUSY_MSG, code: 'BUSY' } : { ok: false, error: m, code: 'NET' }); })
       .api(JSON.stringify(req)));
   }
-  if (API.mode === 'remote') {
-    return fetch(API.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(req) })
-      .then(r => r.json()).catch(e => ({ ok: false, error: 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้: ' + e.message, code: 'NET' }));
+  return fetch(API.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(req) })
+    .then(r => r.text()).then(t => {
+      try { return JSON.parse(t); } catch (e) { /* ไม่ใช่ JSON = หน้าแจ้งข้อผิดพลาดของ Google */ }
+      return BUSY_RE.test(t) || /^\s*</.test(t) ? { ok: false, error: BUSY_MSG, code: 'BUSY' } : { ok: false, error: 'คำตอบจากเซิร์ฟเวอร์ไม่ถูกต้อง', code: 'NET' };
+    })
+    .catch(e => ({ ok: false, error: 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้: ' + e.message, code: 'NET' }));
+}
+async function api(action, q) {
+  const req = Object.assign({ action }, q || {});
+  if (API.mode !== 'gas' && API.mode !== 'remote') return API.ready.then(() => new Promise(res => setTimeout(() => res(JSON.parse(JSON.stringify(API.srv.handle(JSON.parse(JSON.stringify(req)))))), 40)));
+  /* ลองใหม่สูงสุด 4 ครั้ง เว้นช่วงเพิ่มขึ้น + สุ่ม (กันทุกเครื่องยิงซ้ำพร้อมกัน) — คำสั่งเขียนข้อมูลลองใหม่เฉพาะกรณีระบบยังไม่ได้รันคำสั่ง (BUSY) */
+  for (let i = 0; ; i++) {
+    const r = await api1(req);
+    const again = !r.ok && (r.code === 'BUSY' || (r.code === 'NET' && READ_ACT.has(action)));
+    if (!again || i >= 4) return r;
+    await new Promise(z => setTimeout(z, 700 * Math.pow(2, i) + Math.random() * 900));
   }
-  return API.ready.then(() => new Promise(res => setTimeout(() => res(JSON.parse(JSON.stringify(API.srv.handle(JSON.parse(JSON.stringify(req)))))), 40)));
 }
 
 const S = {
@@ -4359,9 +4379,9 @@ function updateUserUi() {
 /* ========================= กราฟ ========================= */
 const CH = {};
 let chartReady = false;
-function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej; document.head.appendChild(s); }); }
+function loadScript(src, sri) { return new Promise((res, rej) => { const s = document.createElement('script'); if (sri) { s.integrity = sri; s.crossOrigin = 'anonymous'; } s.referrerPolicy = 'no-referrer'; s.src = src; s.onload = res; s.onerror = rej; document.head.appendChild(s); }); }
 async function loadChart() {
-  for (const u of CHART_SRC) { try { await loadScript(u); if (window.Chart) break; } catch (e) { /* next */ } }
+  for (const [u, sri] of CHART_SRC) { try { await loadScript(u, sri); if (window.Chart) break; } catch (e) { /* next */ } }
   if (!window.Chart) { $$('.fig').forEach(f => { f.innerHTML = '<div class="nochart">โหลดไลบรารีกราฟไม่สำเร็จ<br>ตรวจสอบการเชื่อมต่ออินเทอร์เน็ต</div>'; }); return; }
   Chart.defaults.font.family = "'Prompt', system-ui, sans-serif";
   Chart.defaults.color = getComputedStyle(document.body).color;
