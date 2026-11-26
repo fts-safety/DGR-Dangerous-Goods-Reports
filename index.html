@@ -599,7 +599,8 @@ button.profph{cursor:zoom-in}
 /* ผู้ใช้ (ผู้พัฒนา) */
 .usec{border:1px solid var(--line);border-radius:14px;margin:10px 0;padding:0 12px 12px;background:var(--card)}
 .usec>summary{cursor:pointer;padding:12px 0;font-size:1.02em}
-.usub{margin:14px 0 6px;color:var(--sky2)}
+.usub{margin:10px 0 6px}
+.usub>summary{cursor:pointer;color:var(--sky2);font-weight:700;padding:6px 0}
 .verline{margin:16px 0 0;text-align:center;user-select:none;-webkit-user-select:none;cursor:default;-webkit-tap-highlight-color:transparent}
 /* แอนิเมชันเลื่อนขั้น Badge: เวทีมืด + รัศมี ให้สีเหรียญเด่นไม่กลืนพื้น */
 .lvlup{background:radial-gradient(circle at 50% 36%,#1d2d4a 0,#080d18 70%)}
@@ -1122,7 +1123,7 @@ html:not([data-boot]) .bootfail{display:block;visibility:hidden;animation:bootsh
  * ==================================================================== */
 var WCR = (function () {
   'use strict';
-  var VERSION = '3.7.5';
+  var VERSION = '3.7.6';
   var SCHEMA = 3;
   var PBKDF2_ITER = 150000;
   var POW_BITS = 16;
@@ -1130,7 +1131,9 @@ var WCR = (function () {
   var POLL_SECONDS = 45;
 
   var RANKS = ['พล.อ.อ.', 'พล.อ.ท.', 'พล.อ.ต.', 'น.อ.', 'น.ท.', 'น.ต.', 'ร.อ.', 'ร.ท.', 'ร.ต.',
-    'พ.อ.อ.', 'พ.อ.ท.', 'พ.อ.ต.', 'จ.อ.', 'จ.ท.', 'จ.ต.', 'พลฯ'];
+    'พ.อ.อ.', 'พ.อ.ท.', 'พ.อ.ต.', 'จ.อ.', 'จ.ท.', 'จ.ต.', 'พลฯ', 'นาย', 'นาง', 'น.ส.'];
+  /* คำนำหน้าชื่อพลเรือน: เลือกได้ตามเพศ (นาย = ชาย · นาง / น.ส. = หญิง) */
+  var CIVIL_TITLE = { 'นาย': 'M', 'นาง': 'F', 'น.ส.': 'F' };
   var ROLES = { IP: 'Instructor Pilot', SP: 'Student Pilot', ATC: 'ATC', OTHER: 'Other' };
   var ROLE_TH = { IP: 'ครูการบิน', SP: 'ศิษย์การบิน', ATC: 'เจ้าหน้าที่ ATC', OTHER: 'อื่น ๆ' };
   var ALTITUDES = ['0-200 ft.', '200-500 ft.', '500-800 ft.', '800-1000 ft.', '1000-1500 ft.',
@@ -1419,16 +1422,26 @@ var WCR = (function () {
   var PIT_RE = /^PIT\d{2}$/;
   var USERNAME_RE = /^[A-Za-z0-9_.-]{3,30}$/;
   var PHONE_RE = /^0\d{8,9}$/;
-  function rankText(u) { return (u.rank || '') + (u.gender === 'F' ? 'หญิง' : ''); }
-  function shortName(u) { return u ? rankText(u) + ' ' + u.firstName + (u.nickname ? ' (' + u.nickname + ')' : '') : 'ไม่ระบุตัวตน'; }
-  function fullName(u) { return u ? rankText(u) + ' ' + u.firstName + ' ' + u.lastName + (isTrue(u.navy) ? ' ร.น.' : '') : ''; }
+  function ranksFor(g) { return RANKS.filter(function (r) { return !CIVIL_TITLE[r] || !g || CIVIL_TITLE[r] === g; }); }
+  function rankOk(r, g) { return RANKS.indexOf(r) >= 0 && (!CIVIL_TITLE[r] || CIVIL_TITLE[r] === g); }
+  function rankIndex(r) { var i = RANKS.indexOf(r); return i < 0 ? RANKS.length : i; }
+  function rankText(u) { var r = u.rank || ''; return r + (u.gender === 'F' && r && !CIVIL_TITLE[r] ? 'หญิง' : ''); }
+  /* ชาย: คำนำหน้าติดชื่อ (ร.อ.ธนวัฒน์) · หญิง: เว้นวรรค (ร.อ.หญิง ลภัสรินทร์) */
+  function titledName(u) { var t = rankText(u); return t ? t + (u.gender === 'F' ? ' ' : '') + u.firstName : u.firstName; }
+  function shortName(u) { return u ? titledName(u) + (u.nickname ? ' (' + u.nickname + ')' : '') : 'ไม่ระบุตัวตน'; }
+  function fullName(u) { return u ? titledName(u) + ' ' + u.lastName + (isTrue(u.navy) ? ' ร.น.' : '') : ''; }
+  /** เรียงรายชื่อ: คำนำหน้าชื่อสูง → ต่ำ แล้วตามตัวอักษรของชื่อ / นามสกุล */
+  function compareUsers(a, b) {
+    return (rankIndex(a.rank) - rankIndex(b.rank)) || String(a.firstName || '').localeCompare(String(b.firstName || ''), 'th') ||
+      String(a.lastName || '').localeCompare(String(b.lastName || ''), 'th');
+  }
   function isTrue(v) { return v === true || v === '1' || v === 1 || v === 'TRUE' || v === 'true'; }
   function validateProfile(p) {
     p = p || {};
     var e = {};
     var out = {
       gender: p.gender === 'F' ? 'F' : (p.gender === 'M' ? 'M' : ''),
-      rank: RANKS.indexOf(p.rank) >= 0 ? p.rank : '',
+      rank: rankOk(p.rank, p.gender) ? p.rank : '',
       firstName: cleanText(p.firstName, 40), lastName: cleanText(p.lastName, 40),
       navy: isTrue(p.navy) ? '1' : '', nickname: cleanText(p.nickname, 30),
       phone: String(p.phone || '').replace(/[\s-]/g, ''), lineId: cleanText(p.lineId, 40),
@@ -1438,7 +1451,7 @@ var WCR = (function () {
       roleOther: cleanText(p.roleOther, 60)
     };
     if (!out.gender) e.gender = 'เลือกเพศ';
-    if (!out.rank) e.rank = 'เลือกชั้นยศ';
+    if (!out.rank) e.rank = 'เลือกคำนำหน้าชื่อ';
     if (!THAI_RE.test(out.firstName)) e.firstName = 'ชื่อต้องเป็นภาษาไทยเท่านั้น';
     if (!THAI_RE.test(out.lastName)) e.lastName = 'นามสกุลต้องเป็นภาษาไทยเท่านั้น';
     if (!out.nickname) e.nickname = 'กรอกชื่อเล่น';
@@ -2633,7 +2646,7 @@ var WCR = (function () {
     CIRCUIT_LEGS: CIRCUIT_LEGS, RP_POINTS: RP_POINTS, TRAIN_PRIMARY: TRAIN_PRIMARY, TRAIN_ADVANCED: TRAIN_ADVANCED,
     combineTraining: combineTraining, trainingMembers: trainingMembers, circuitSegment: circuitSegment, circuitView: circuitView,
     parseLoc: parseLoc, groupMult: groupMult, sizeValue: sizeValue, computeScore: computeScore, buildReport: buildReport, round2: round2,
-    rankText: rankText, shortName: shortName, fullName: fullName, isTrue: isTrue, validateProfile: validateProfile,
+    rankText: rankText, shortName: shortName, fullName: fullName, titledName: titledName, ranksFor: ranksFor, rankOk: rankOk, rankIndex: rankIndex, compareUsers: compareUsers, CIVIL_TITLE: CIVIL_TITLE, isTrue: isTrue, validateProfile: validateProfile,
     USERNAME_RE: USERNAME_RE, SP_RE: SP_RE, PIT_RE: PIT_RE, THAI_RE: THAI_RE,
     BADGES: BADGES, badgeFor: badgeFor, nextBadge: nextBadge,
     addDays: addDays, dow: dow, mondayOf: mondayOf, addMonths: addMonths, lastDay: lastDay, fiscalYear: fiscalYear,
@@ -2877,6 +2890,8 @@ const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmt = n => { n = Number(n) || 0; return Number.isInteger(n) ? n.toLocaleString('en-US') : n.toLocaleString('en-US', { maximumFractionDigits: 2 }); };
+/** ค่าความเสี่ยง: ทศนิยม 1 ตำแหน่งเสมอ */
+const fmt1 = n => (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const ic = id => `<svg class="i"><use href="#i-${id}"/></svg>`;
 const LS = {
   get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
@@ -4113,7 +4128,7 @@ const SAT = {
   af: { label: 'สนามบิน', w: 1544, h: 1000, b: [99.850, 14.074, 99.955, 14.142] },
   tr: { label: 'พื้นที่ฝึก', w: 760, h: 1391, b: [99.36, 12.98, 100.42, 14.92] },
   ov: { label: 'ภาพรวม', w: 1280, h: 975, b: [99.782, 14.010, 100.008, 14.182] },
-  ap: { label: 'ภาพรวม Reporting Point', w: 900, h: 1974, b: [99.72, 13.67, 100.03, 14.35] } /* แผนที่ความร้อนแท็บ AERODROME: ครอบทุก Reporting Point (T / R / J) */
+  ad: { label: 'วงจรสนามบิน', w: 1600, h: 1440, b: [99.825, 14.066, 99.945, 14.174] } /* แผนที่ความร้อนแท็บ AERODROME: วงจรทั้งหมด (รวม Outside Downwind) + Apron / TWY */
 };
 /* ภาพดาวเทียม: โหลดจาก Esri World Imagery (ช่วงพิกัดและขนาดเดียวกับที่ใช้วางเส้น / จุดบนแผนที่)
  * ไฟล์ติดตั้งไม่ฝังภาพเพื่อให้ไฟล์เล็ก (Apps Script ส่งหน้าเว็บขนาดใหญ่มาไม่ครบ) · ไฟล์พรีวิวเติม SAT_EMBED ให้ */
@@ -4294,7 +4309,7 @@ function renderStatus() {
   else st = S.status;
   if (!st) return;
   $('#stWin').textContent = st.offHours ? 'นอกเวลา' : st.label;
-  $('#stScore').textContent = fmt(st.value);
+  $('#stScore').textContent = fmt1(st.value);
   $('#stLvl').innerHTML = `<span class="lvl ${st.level}${st.alert ? ' ALERT' : ''}">${st.alert ? 'ALERT · ' : ''}${W.RISK[st.level].th}${st.offHours ? ' (คาดการณ์)' : ''}</span>`;
   renderAlertBar();
 }
@@ -4304,7 +4319,7 @@ function renderToday() {
   $('#todayWins').innerHTML = W.WINDOWS.map((w, i) => {
     const v = W.windowValue(S.idx, n.date, i, S.cfg);
     const lv = W.levelAt(n.date, w.id, v.value, S.cfg, S.alertMap), lvl = lv.level;
-    return `<div class="win ${w.id === cur ? 'now' : ''}${lv.alert ? ' alert' : ''}"><small>${w.label}${w.id === cur ? ' · ตอนนี้' : ''}</small><b>${fmt(v.value)}</b><span class="lvl ${lvl}">${lv.alert ? 'ALERT' : W.RISK[lvl].th}</span></div>`;
+    return `<div class="win ${w.id === cur ? 'now' : ''}${lv.alert ? ' alert' : ''}"><small>${w.label}${w.id === cur ? ' · ตอนนี้' : ''}</small><b>${fmt1(v.value)}</b><span class="lvl ${lvl}">${lv.alert ? 'ALERT' : W.RISK[lvl].th}</span></div>`;
   }).join('');
   $('#todayCrit').innerHTML = `เกณฑ์: <span class="lvl NORMAL">ปกติ &lt; ${fmt(S.cfg.thresholdMedium)}</span> <span class="lvl MEDIUM">ปานกลาง ≥ ${fmt(S.cfg.thresholdMedium)}</span> <span class="lvl SEVERE">รุนแรง ≥ ${fmt(S.cfg.thresholdSevere)}</span>`;
 }
@@ -4670,21 +4685,18 @@ function heatAgg() {
 function heatBand(v, max) { const t = max > 0 ? v / max : 0; return t > 0.75 ? 3 : t > 0.5 ? 2 : t > 0.25 ? 1 : 0; }
 /** ชั้นข้อมูลของแต่ละภาพ: สนามบิน / ภาพรวม = วงจร TWY Apron RP · พื้นที่ฝึก = พื้นที่การฝึก */
 /** แท็บแผนที่ความร้อน (แคบ → กว้าง) และบริเวณที่แสดงในแต่ละแท็บ */
-/* AERODROME = วงจร + Reporting Point (ภาพรวมรอบสนามบิน) */
-const HEAT_TABS = { rw: 'RUNWAY', ap: 'AERODROME', tr: 'AREA' };
+/* ALL = พื้นที่ฝึก + Reporting Point (รัศมี 2 กม.) · AERODROME = วงจร + Apron / TWY · รอบโรงเรียน = หมุดรายงานรอบโรงเรียน (ภาพเดียวกับตอนปักหมุด) */
+const HEAT_TABS = { tr: 'ALL', ad: 'AERODROME', af: 'รอบโรงเรียน' };
 const HEAT_VIEWS = Object.keys(HEAT_TABS);
 function heatTab(k) {
-  if (k === 'RWY') return ['rw', 'ap'];
-  if (k === 'APRON' || k.startsWith('TWY:')) return ['rw'];
-  if (k.startsWith('RP:')) return ['ap'];
-  if (k.startsWith('TR:')) return ['tr'];
-  return ['ap']; /* ขาวงจร */
+  if (k.startsWith('RP:') || k.startsWith('TR:')) return ['tr'];
+  return ['ad']; /* ขาวงจร · RWY · Apron · TWY */
 }
 function heatLayers(agg, big, v) {
   const by = {}, areas = [], circles = [], lines = [], dots = [];
   agg.pts.forEach(o => { by[o.k] = o; });
   const keys = Object.keys(GEO).filter(k => heatTab(k).includes(v));
-  const pins = v === 'tr' ? [] : agg.pts.filter(o => o.pt && satIn(v, o.pt[0], o.pt[1]));
+  const pins = v === 'af' ? agg.pts.filter(o => o.pt && satIn(v, o.pt[0], o.pt[1])) : [];
   const maxS = Math.max(0, ...keys.filter(k => by[k]).map(k => by[k].s), ...pins.map(o => o.s));
   keys.forEach(k => {
     const g = GEO[k], o = by[k], band = o ? heatBand(o.s, maxS) : -1, col = o ? HEAT_COL[band] : '#ffffff';
@@ -4698,18 +4710,16 @@ function heatLayers(agg, big, v) {
     else if (rp) dots.push({ lat: g.p[0], lng: g.p[1], d: 7, col: '#ffffff', cls: 'plain' + rp, label: geoLabel(k), info }); /* ชื่อจุดแสดงตลอด แม้ยังไม่มีรายงาน */
   });
   if (v === 'tr') dots.push({ lat: W.AERO.lat, lng: W.AERO.lng, d: 9, col: '#ffffff', cls: 'plain', label: 'สนามบินกำแพงแสน', info: 'สนามบินกำแพงแสน' });
-  else {
-    if (v !== 'rw') dots.push({ lat: W.AERO.lat, lng: W.AERO.lng, d: 7, col: '#ffffff', cls: 'plain', info: 'กึ่งกลางสนามบิน' });
-    pins.forEach(o => { /* รอบโรงเรียน: หมุดตามพิกัดที่รายงาน */
-      const band = heatBand(o.s, maxS);
-      dots.push({ lat: o.pt[0], lng: o.pt[1], d: 16, col: HEAT_COL[band], count: o.n, info: `รอบโรงเรียน · ${fmt(o.n)} รายงาน · ${fmt(o.q)} ตัว/ชิ้น · ระดับ${HEAT_TH[band]}`, cls: band === 0 ? 'lt' : '' });
-    });
-  }
+  if (v === 'af') dots.push({ lat: W.AERO.lat, lng: W.AERO.lng, d: 7, col: '#ffffff', cls: 'plain', info: 'กึ่งกลางสนามบิน' });
+  pins.forEach(o => { /* รอบโรงเรียน: หมุดตามพิกัดที่รายงาน */
+    const band = heatBand(o.s, maxS);
+    dots.push({ lat: o.pt[0], lng: o.pt[1], d: 16, col: HEAT_COL[band], count: o.n, info: `รอบโรงเรียน · ${fmt(o.n)} รายงาน · ${fmt(o.q)} ตัว/ชิ้น · ระดับ${HEAT_TH[band]}`, cls: band === 0 ? 'lt' : '' });
+  });
   return { lines: areas.concat(circles, lines), dots };
 }
 function heatNote(el, out, v) {
   el.classList.remove('on');
-  const agg = HEAT.agg || { pts: [] }, other = HEAT_VIEWS.filter(t => t !== v && agg.pts.some(o => !o.pt && heatTab(o.k).includes(t) && !heatTab(o.k).includes(v)));
+  const agg = HEAT.agg || { pts: [] }, other = HEAT_VIEWS.filter(t => t !== v && agg.pts.some(o => o.pt ? t === 'af' : heatTab(o.k).includes(t) && !heatTab(o.k).includes(v)));
   const t = [];
   if (out.length) t.push('นอกภาพนี้: ' + out.map(d => `${d.label} ${fmt(d.count)}`).join(' · '));
   if (other.length) t.push('มีรายงานในแท็บ ' + other.map(x => HEAT_TABS[x]).join(' / '));
@@ -4730,7 +4740,7 @@ function renderHeat() {
   $('#heatLegend').innerHTML = heatLegendHtml();
   $('#heatOff').textContent = agg.off.length ? 'ไม่แสดงบนภาพ (ไม่มีพิกัด): ' + agg.off.map(o => `${o.label} ${fmt(o.n)} รายงาน`).join(' · ') : '';
   const box = $('#heatMap');
-  if (!HEAT.sv || !box.contains(box.querySelector('.satbox'))) HEAT.sv = satView(box, { view: 'rw', views: HEAT_VIEWS, names: HEAT_TABS, layers: v => heatLayers(HEAT.agg, false, v), note: heatNote });
+  if (!HEAT.sv || !box.contains(box.querySelector('.satbox'))) HEAT.sv = satView(box, { view: 'tr', views: HEAT_VIEWS, names: HEAT_TABS, layers: v => heatLayers(HEAT.agg, false, v), note: heatNote });
   else HEAT.sv.redraw();
 }
 /** ขยายแผนที่ความร้อนเต็มจอ (ซูมได้ ซูม 1.5× ขึ้นไปแสดงชื่อจุด) */
@@ -4739,7 +4749,7 @@ function openHeatBig() {
   const m = modal({ title: 'แผนที่ความร้อน', wide: true,
     body: `<p class="hint" style="margin:0 0 8px">${esc($('#heatSub').textContent)}</p><div id="heatBig"></div><div class="heatlegend">${heatLegendHtml()}</div>` });
   m.q('.modal').classList.add('full');
-  satView(m.q('#heatBig'), { view: HEAT.sv ? HEAT.sv.view : 'rw', views: HEAT_VIEWS, names: HEAT_TABS, big: true, layers: v => heatLayers(agg, true, v), note: heatNote });
+  satView(m.q('#heatBig'), { view: HEAT.sv ? HEAT.sv.view : 'tr', views: HEAT_VIEWS, names: HEAT_TABS, big: true, layers: v => heatLayers(agg, true, v), note: heatNote });
 }
 function renderDashboard() { renderHeat(); if (!chartReady) return; fillSpeciesSelectors(); renderRisk(); renderAreas(); renderSpecies(); }
 
@@ -5100,12 +5110,14 @@ function bindPhotoPicker(m, onPick) {
   };
 }
 
+/** ตัวเลือกคำนำหน้าชื่อตามเพศ (หญิง: ยศทหารต่อท้าย "หญิง") */
+function rankOpts(g, cur) { return W.ranksFor(g).map(r => `<option value="${esc(r)}" ${cur === r ? 'selected' : ''}>${esc(W.rankText({ rank: r, gender: g }))}</option>`).join(''); }
 function profileFields(p) {
   p = p || {};
-  const rk = W.RANKS.map(r => `<option value="${esc(r)}" ${p.rank === r ? 'selected' : ''}>${esc(r)}${p.gender === 'F' ? 'หญิง' : ''}</option>`).join('');
+  const rk = rankOpts(p.gender, p.rank);
   const role = (k, t, d) => `<button type="button" data-role="${k}" aria-pressed="${p.role === k}"><span class="ic">${ic(k === 'ATC' ? 'headset' : k === 'OTHER' ? 'pen' : 'plane')}</span><span><b>${t}</b><small>${d}</small></span></button>`;
   return `<div class="f2"><div><label class="f">เพศ</label><div class="seg" id="pf-gender"><button type="button" data-gd="M" aria-pressed="${p.gender === 'M'}">ชาย</button><button type="button" data-gd="F" aria-pressed="${p.gender === 'F'}">หญิง</button></div><div class="err" data-e="gender"></div></div>
-    <div><label class="f" for="pf-rank">ชั้นยศ</label><select class="in" id="pf-rank"><option value="">— เลือก —</option>${rk}</select><div class="err" data-e="rank"></div></div>
+    <div><label class="f" for="pf-rank">คำนำหน้าชื่อ</label><select class="in" id="pf-rank"><option value="">— เลือก —</option>${rk}</select><div class="err" data-e="rank"></div></div>
     <div><label class="f" for="pf-first">ชื่อ (ภาษาไทยเท่านั้น)</label><input class="in" id="pf-first" value="${esc(p.firstName)}" maxlength="40" lang="th"><div class="err" data-e="firstName"></div></div>
     <div><label class="f" for="pf-last">นามสกุล (ภาษาไทยเท่านั้น)</label><input class="in" id="pf-last" value="${esc(p.lastName)}" maxlength="40" lang="th"><div class="err" data-e="lastName"></div>
       <label class="chk"><input type="checkbox" id="pf-navy" ${W.isTrue(p.navy) ? 'checked' : ''}> ร.น. (สำหรับ ศบ.ทร.)</label></div>
@@ -5132,7 +5144,7 @@ function bindProfile(m, p) {
     m.qa('#pf-extra [data-for]').forEach(d => d.classList.toggle('hide', !d.dataset.for.split(' ').includes(st.role)));
     m.q('#pf-spreq').textContent = st.role === 'SP' ? '(บังคับกรอก)' : '(ไม่บังคับ)';
     const sel = m.q('#pf-rank'), cur = sel.value;
-    [...sel.options].forEach(o => { if (o.value) o.textContent = o.value + (st.gender === 'F' ? 'หญิง' : ''); }); sel.value = cur;
+    if (sel.dataset.g !== st.gender) { sel.dataset.g = st.gender; sel.innerHTML = '<option value="">— เลือก —</option>' + rankOpts(st.gender, W.rankOk(cur, st.gender) ? cur : ''); }
     const v = read();
     m.q('#pf-preview').textContent = v.rank && v.firstName ? W.shortName(v) + ' · ' + W.fullName(v) : '—';
   };
@@ -5541,12 +5553,15 @@ function devTab(m) {
         ${u.inactive ? `<button class="btn sm dng" type="button" data-ud="${u.id}">${ic('trash')}ลบบัญชีถาวร</button>` : u.newSignup ? `<button class="btn sm dng" type="button" data-uj="${u.id}">${ic('trash')}ลบการสมัคร</button>` : ''}</div></td></tr>`;
     const table = us => `<div class="scroll"><table class="stack"><thead><tr><th>ชื่อ</th><th>Username</th><th>รุ่น / รายละเอียด</th><th>สมัครเมื่อ</th><th>รายงานล่าสุด</th><th>สถานะ</th><th></th></tr></thead><tbody>${us.map(row).join('')}</tbody></table></div>`;
     const sections = ROLE_ORDER.map(([role, en, th]) => {
-      const us = d.users.filter(u => u.role === role);
+      const us = d.users.filter(u => u.role === role).sort(W.compareUsers);
       let inner;
       if (!us.length) inner = '<p class="hint">— ไม่มี —</p>';
-      else if (role === 'SP') {
+      else if (role === 'SP') { /* ศิษย์การบิน: แยกตามรุ่น (มาก → น้อย) พับ / ขยายได้ทีละรุ่น */
         const g = {}; us.forEach(u => { const k = (u.spClass || '').split('-')[0] || 'ไม่ระบุรุ่น'; (g[k] = g[k] || []).push(u); });
-        inner = Object.keys(g).sort((a, b) => (a < b ? 1 : -1)).map(k => `<h4 class="usub">รุ่น ${esc(k)} <span class="hint">(${g[k].length})</span></h4>${table(g[k])}`).join('');
+        const num = k => { const m = /\d+/.exec(k); return m ? +m[0] : -1; };
+        const ks = Object.keys(g).sort((a, b) => num(b) - num(a) || (a < b ? -1 : 1));
+        inner = (ks.length > 1 ? `<div class="row" style="margin:8px 0"><button class="btn sm" type="button" data-spf="1">พับทุกรุ่น</button><button class="btn sm" type="button" data-spf="0">ขยายทุกรุ่น</button></div>` : '') +
+          ks.map(k => `<details class="usub" open><summary>รุ่น ${esc(k)} <span class="hint">(${g[k].length})</span></summary>${table(g[k])}</details>`).join('');
       } else inner = table(us);
       const pr = us.filter(isPend).length;
       return `<details class="usec" ${us.length ? 'open' : ''}><summary><b>${esc(en)}</b> · ${esc(th)} <span class="hint">(${us.length})</span>${pr ? ` <span class="redpill">รอยืนยัน ${pr}</span>` : ''}</summary>${inner}</details>`;
@@ -5558,12 +5573,14 @@ function devTab(m) {
     labelStack(box);
     box.querySelector('#usrCsv').onclick = () => {
       const q = v => { let s = String(v == null ? '' : v); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-      const H = ['ID', 'Username', 'ยศ', 'ชื่อ', 'นามสกุล', 'ชื่อเล่น', 'ฐานะ', 'ยืนยันฐานะ', 'รุ่น SP', 'รุ่น PIT', 'ระบุฐานะ', 'สมัครเมื่อ', 'รายงานล่าสุด', 'จำนวนรายงาน', 'สถานะบัญชี', 'ไม่มีการเคลื่อนไหว'];
+      const H = ['ID', 'Username', 'คำนำหน้าชื่อ', 'ชื่อ', 'นามสกุล', 'ชื่อเล่น', 'ฐานะ', 'ยืนยันฐานะ', 'รุ่น SP', 'รุ่น PIT', 'ระบุฐานะ', 'สมัครเมื่อ', 'รายงานล่าสุด', 'จำนวนรายงาน', 'สถานะบัญชี', 'ไม่มีการเคลื่อนไหว'];
       const txt = '﻿' + H.join(',') + '\n' + d.users.map(u => [u.id, u.username, W.rankText(u), u.firstName, u.lastName, u.nickname, W.ROLES[u.role], (u.role === 'ATC' || u.role === 'IP') ? (u.roleVerified ? 'ยืนยันแล้ว' : 'รอยืนยัน') : '-', u.spClass, u.pitClass, u.roleOther,
         String(u.createdAt).slice(0, 10), u.lastReport, u.reportCount, u.active ? 'ใช้งาน' : 'ระงับ', u.inactive ? 'ใช่' : ''].map(q).join(',')).join('\n');
       downloadText(`KPS-WCR_users_${today}.csv`, txt);
     };
     box.onclick = async e => {
+      const spf = e.target.closest('[data-spf]');
+      if (spf) { box.querySelectorAll('details.usub').forEach(x => { x.open = spf.dataset.spf !== '1'; }); return; }
       const a = e.target.closest('[data-ua]'), v = e.target.closest('[data-uv]'), rp = e.target.closest('[data-ur]'), x = e.target.closest('[data-ux]'), del = e.target.closest('[data-ud]'), rj = e.target.closest('[data-uj]');
       const call = async (q, msg) => { const r = await api('devSetUser', Object.assign({ devToken: DEV.token }, q)); if (!r.ok) return toast(r.error, 'bad'); toast(msg, 'ok'); S.usersRev = ''; if (isUser()) await sync(); reload(); };
       if (a) return call({ userId: a.dataset.ua, active: a.dataset.on === '1' }, 'อัปเดตผู้ใช้แล้ว');
