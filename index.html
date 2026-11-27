@@ -1123,7 +1123,7 @@ html:not([data-boot]) .bootfail{display:block;visibility:hidden;animation:bootsh
  * ==================================================================== */
 var WCR = (function () {
   'use strict';
-  var VERSION = '3.7.6';
+  var VERSION = '3.7.7';
   var SCHEMA = 3;
   var PBKDF2_ITER = 150000;
   var POW_BITS = 16;
@@ -1131,7 +1131,9 @@ var WCR = (function () {
   var POLL_SECONDS = 45;
 
   var RANKS = ['พล.อ.อ.', 'พล.อ.ท.', 'พล.อ.ต.', 'น.อ.', 'น.ท.', 'น.ต.', 'ร.อ.', 'ร.ท.', 'ร.ต.',
-    'พ.อ.อ.', 'พ.อ.ท.', 'พ.อ.ต.', 'จ.อ.', 'จ.ท.', 'จ.ต.', 'พลฯ', 'นาย', 'นาง', 'น.ส.'];
+    'พ.อ.อ.', 'พ.อ.ท.', 'พ.อ.ต.', 'จ.อ.', 'จ.ท.', 'จ.ต.', 'พลฯ', 'นาย', 'นาง', 'น.ส.', 'ไม่มี'];
+  /* "ไม่มี" = ไม่มีคำนำหน้าชื่อ (เช่น บัญชีกลางของหน่วย) เลือกได้ทั้งชายและหญิง · ห้ามขึ้นต้นด้วย - (ชีตจะเติม ' กันสูตร) */
+  var NO_TITLE = 'ไม่มี';
   /* คำนำหน้าชื่อพลเรือน: เลือกได้ตามเพศ (นาย = ชาย · นาง / น.ส. = หญิง) */
   var CIVIL_TITLE = { 'นาย': 'M', 'นาง': 'F', 'น.ส.': 'F' };
   var ROLES = { IP: 'Instructor Pilot', SP: 'Student Pilot', ATC: 'ATC', OTHER: 'Other' };
@@ -1425,7 +1427,7 @@ var WCR = (function () {
   function ranksFor(g) { return RANKS.filter(function (r) { return !CIVIL_TITLE[r] || !g || CIVIL_TITLE[r] === g; }); }
   function rankOk(r, g) { return RANKS.indexOf(r) >= 0 && (!CIVIL_TITLE[r] || CIVIL_TITLE[r] === g); }
   function rankIndex(r) { var i = RANKS.indexOf(r); return i < 0 ? RANKS.length : i; }
-  function rankText(u) { var r = u.rank || ''; return r + (u.gender === 'F' && r && !CIVIL_TITLE[r] ? 'หญิง' : ''); }
+  function rankText(u) { var r = u.rank === NO_TITLE ? '' : (u.rank || ''); return r + (u.gender === 'F' && r && !CIVIL_TITLE[r] ? 'หญิง' : ''); }
   /* ชาย: คำนำหน้าติดชื่อ (ร.อ.ธนวัฒน์) · หญิง: เว้นวรรค (ร.อ.หญิง ลภัสรินทร์) */
   function titledName(u) { var t = rankText(u); return t ? t + (u.gender === 'F' ? ' ' : '') + u.firstName : u.firstName; }
   function shortName(u) { return u ? titledName(u) + (u.nickname ? ' (' + u.nickname + ')' : '') : 'ไม่ระบุตัวตน'; }
@@ -1870,6 +1872,100 @@ var WCR = (function () {
   var PHOTO_KEEP_DAYS = 365, PHOTO_CELL = 48000;
   var DEVICE_TTL_DAYS = 180;
 
+  /* ---------------- แจ้งเตือน Telegram ---------------- */
+  /* ลิงก์แอปท้ายทุกข้อความ (เปลี่ยนได้ด้วย Script Property TELEGRAM_LINK) */
+  var TG_LINK = 'https:\/\/fts-safety.github.io/DGR-Dangerous-Goods-Reports/';
+  var TG_LV = { NORMAL: '🟢', MEDIUM: '🟡', SEVERE: '🔴' };
+  var TG_CAT = { BIRD: '🐦', ANIMAL: '🐾', HAZARD: '⚠️' };
+  var TG_PRE_AT = '07:00', TG_SUM_AT = '15:30', TG_GRACE_MIN = 30;
+  function tgEsc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function tgDow(iso) { return TH_DOW[new Date(isoToUTC(iso)).getUTCDay()]; }
+  /** ผู้รายงาน: ชื่อ-นามสกุลเต็ม + (ฐานะ) · บัญชีที่ไม่มีคำนำหน้าชื่อ (บัญชีกลาง เช่น หอบังคับการบิน) แสดงชื่อบัญชีอย่างเดียว */
+  function tgWho(u) {
+    if (!u) return 'ไม่ระบุตัวตน';
+    var role = u.role === 'OTHER' ? (u.roleOther || 'Other') : (u.role || '');
+    return fullName(u) + (u.rank && u.rank !== NO_TITLE && role ? ' (' + role + ')' : '');
+  }
+  function tgWhat(r) {
+    var q = Number(r.quantity) || 1;
+    if (r.category === 'HAZARD') return r.species + ' (' + sizeText('HAZARD', r.sizeClass) + ')' + (q > 1 ? ' · จำนวน ' + q : '');
+    return r.species + (r.speciesKey === 'unknown' ? '' : ' (' + sizeText(r.category, r.sizeClass) + ')') + ' ' + q + ' ตัว';
+  }
+  function tgWin(st) { return (st.offHours ? 'ช่วงบินถัดไป ' : 'ช่วงบิน ') + st.label; }
+  function tgAdvice(lv) { return lv === 'SEVERE' ? 'ขอให้เพิ่มความระมัดระวังสูงสุด' : lv === 'MEDIUM' ? 'ขอให้เพิ่มความระมัดระวัง' : 'อยู่ในเกณฑ์ ปฏิบัติการบินได้ตามปกติ'; }
+  function tgLinkLines(link) { return ['', 'ปัจจุบันสามารถรายงานผ่านลิงก์ 👇', link || TG_LINK]; }
+  function tgDetail(o) {
+    var r = o.row;
+    return ['📍 ' + tgEsc(r.locLabel) + (r.category === 'BIRD' && r.altitude ? ' · ' + tgEsc(r.altitude) : ''),
+      '🕘 พบเวลา ' + r.time + ' น. · ' + thDate(r.date) + (o.back ? ' (ลงย้อนหลัง)' : ''), '👤 ' + tgEsc(o.who)];
+  }
+  /** สถานการณ์เปลี่ยน (ระดับก่อน → หลัง) พร้อมสาเหตุ */
+  function tgChangeText(before, now, cause, link) {
+    return [TG_LV[now.level] + ' <b>สถานการณ์เปลี่ยน: ' + RISK[before.level].th + ' → ' + RISK[now.level].th + '</b>',
+      tgWin(now) + ' · ' + tgAdvice(now.level), ''].concat(cause).concat(tgLinkLines(link)).join('\n');
+  }
+  /** รายงานใหม่ — o: { row, who, back, before, now, link } (before/now = สถานะช่วงบินปัจจุบันก่อน/หลังรายงาน)
+   *  ALERT ของช่วงปัจจุบัน → หัวข้อ ALERT · ระดับเปลี่ยน → หัวข้อสถานการณ์เปลี่ยน (รวมเป็นข้อความเดียว) */
+  function tgReportText(o) {
+    var r = o.row, now = o.now, what = tgEsc(tgWhat(r));
+    if (r.alert === '1' && now.alert && now.alert.reportId === r.id)
+      return ['🟣🚨 <b>ALERT — สถานการณ์ รุนแรง ทันที</b>', tgWin(now), '', 'สาเหตุ: ' + tgEsc(r.species)].concat(tgDetail(o)).concat(tgLinkLines(o.link)).join('\n');
+    if (o.before && o.before.level !== now.level) return tgChangeText(o.before, now, ['สาเหตุ: ' + what].concat(tgDetail(o)), o.link);
+    var same = r.date === now.date && r.windowId === now.windowId;
+    var stl = same ? 'สถานการณ์ช่วงนี้' : now.offHours ? 'สถานการณ์ช่วงบินถัดไป (' + now.label + ')' : 'สถานการณ์ปัจจุบัน (ช่วงบิน ' + now.label + ')';
+    var wi = windowIndex(r.windowId);
+    return [TG_CAT[r.category] + ' <b>รายงานใหม่ · ' + (wi < 0 ? 'นอกช่วงบิน' : 'ช่วงบิน ' + WINDOWS[wi].label) + '</b>', what].concat(tgDetail(o))
+      .concat([stl + ': ' + TG_LV[now.level] + ' ' + RISK[now.level].th]).concat(tgLinkLines(o.link)).join('\n');
+  }
+  /** ก่อนเริ่มบิน (07:00) / เริ่มช่วงบิน (เฉพาะเมื่อไม่ปกติ) */
+  function tgWindowText(st, date, first, link) {
+    return [TG_LV[st.level] + ' <b>' + (first ? 'ก่อนเริ่มบิน' : 'เริ่มช่วงบิน ' + st.label) + ' · ' + tgDow(date) + ' ' + thDate(date) + '</b>',
+      'สถานการณ์: ' + RISK[st.level].th + (st.alert ? ' (ALERT: ' + tgEsc(st.alert.species) + ')' : ''), tgAdvice(st.level), '',
+      'พบนก สัตว์ หรือสิ่งอันตราย'].concat(tgLinkLines(link).slice(1)).join('\n');
+  }
+  /** ยกเลิก ALERT — a: แถว Alerts · now: สถานะปัจจุบันหลังยกเลิก */
+  function tgCancelText(a, now) {
+    var k = String(a.windows || '').split(',')[0].split('|'), wi = windowIndex(k[1]);
+    return ['✅ <b>ยกเลิก ALERT' + (wi < 0 ? '' : ' ช่วงบิน ' + WINDOWS[wi].label) + '</b> (แจ้งผิด)',
+      tgEsc(a.species) + ' · พบเวลา ' + a.time + ' น. · ' + thDate(String(a.date)),
+      'สถานการณ์ปัจจุบัน: ' + TG_LV[now.level] + ' ' + RISK[now.level].th].join('\n');
+  }
+  /** ชนิดที่พบมากสุด: จัดอันดับตามค่าความเสี่ยงรวมของรายงาน (ไม่แสดงตัวเลขค่าความเสี่ยง) → "ชนิด (N ตัว/M ครั้ง)" */
+  function tgTopSpecies(rows) {
+    var m = {}, best = null;
+    (rows || []).forEach(function (r) {
+      var k = String(r.species || ''), a = m[k] || (m[k] = { name: k, cat: r.category, score: 0, qty: 0, n: 0 });
+      a.score += Number(r.score) || 0; a.qty += Number(r.quantity) || 1; a.n++;
+    });
+    Object.keys(m).forEach(function (k) { var a = m[k]; if (!best || a.score > best.score || (a.score === best.score && (a.qty > best.qty || (a.qty === best.qty && a.n > best.n)))) best = a; });
+    if (!best) return '-';
+    return tgEsc(best.name) + ' (' + (best.cat === 'HAZARD' ? best.n + ' ครั้ง' : best.qty.toLocaleString('en-US') + ' ตัว/' + best.n + ' ครั้ง') + ')';
+  }
+  /** สรุปรายวัน — o: { date, reports: รายงานของวันนั้น, week / month: รายงานสัปดาห์นี้ (จ.–วันนี้) / เดือนนี้, windows: [{ label, level }], link } */
+  function tgSummaryText(o) {
+    var rs = o.reports || [], cat = { BIRD: 0, ANIMAL: 0, HAZARD: 0 }, loc = {}, who = {}, anon = 0;
+    rs.forEach(function (r) {
+      cat[r.category] = (cat[r.category] || 0) + 1;
+      loc[r.locLabel] = (loc[r.locLabel] || 0) + 1;
+      if (r.reporterId && !isTrue(r.anonymous)) who[r.reporterId] = 1; else anon++;
+    });
+    var top = function (m, n) { return Object.keys(m).sort(function (a, b) { return m[b] - m[a] || (a < b ? -1 : 1); }).slice(0, n); };
+    var L = ['📊 <b>สรุปประจำวัน ' + tgDow(o.date) + ' ' + thDate(o.date) + '</b>'];
+    if (rs.length) L.push('รายงานทั้งหมด ' + rs.length + ' รายการ', 'นก ' + cat.BIRD + ' · สัตว์อื่น ' + cat.ANIMAL + ' · สิ่งอันตราย ' + cat.HAZARD);
+    else L.push('วันนี้ยังไม่มีรายงาน');
+    L.push('', 'ช่วงบิน');
+    (o.windows || []).forEach(function (w) { L.push(w.label + '  ' + TG_LV[w.level] + ' ' + RISK[w.level].th); });
+    if (rs.length) L.push('', '📍 จุดที่พบมากสุด: ' + top(loc, 2).map(function (k) { return tgEsc(k) + ' (' + loc[k] + ')'; }).join(' · '));
+    L.push('', '🐦 ชนิดที่พบมากสุด (ตามค่าความเสี่ยง)', 'วันนี้ : ' + tgTopSpecies(rs), 'สัปดาห์นี้ : ' + tgTopSpecies(o.week || rs), 'เดือนนี้ : ' + tgTopSpecies(o.month || rs));
+    if (rs.length) {
+      var nw = Object.keys(who).length, ppl = [];
+      if (nw) ppl.push('ผู้รายงาน ' + nw + ' คน');
+      if (anon) ppl.push('ไม่ระบุตัวตน ' + anon + ' รายงาน');
+      L.push('', '👥 ' + ppl.join(' · ') + ' ขอบคุณครับ 🙏');
+    }
+    return L.concat(tgLinkLines(o.link)).join('\n');
+  }
+
   function createServer(env) {
     function err(msg, code) { var e = new Error(msg); e.code = code || ''; return e; }
     function nowMs() { return env.now().getTime(); }
@@ -2046,6 +2142,66 @@ var WCR = (function () {
         .map(function (a) { return { reportId: a.reportId, date: a.date, time: a.time, species: a.species, windows: String(a.windows || '').split(',').filter(String) }; });
     }
     function photoIds() { return env.rows('ReportPhotos').map(function (p) { return p.reportId; }); }
+    /* ---- Telegram: ส่งหลังปลดล็อกแล้ว (ไม่ถ่วงคำขออื่น) · ส่งไม่สำเร็จไม่กระทบการบันทึกรายงาน ---- */
+    var TGQ = [];
+    function tgOn() { return !!(env.telegram && !env.prop('TELEGRAM_OFF') && env.prop('TELEGRAM_TOKEN') && env.prop('TELEGRAM_CHAT_ID')); }
+    function tgState() { return !env.telegram ? 'none' : env.prop('TELEGRAM_OFF') ? 'off' : tgOn() ? 'on' : 'unset'; }
+    function tgLink() { return env.prop('TELEGRAM_LINK') || TG_LINK; }
+    function tgQueue(text, photo) { TGQ.push([text, photo || '']); }
+    function tgPost(text, photo) {
+      var tok = env.prop('TELEGRAM_TOKEN') || '', chat = env.prop('TELEGRAM_CHAT_ID'), r = null;
+      try {
+        r = env.telegram(tok, chat, text, photo || '');
+        /* กลุ่มถูกอัปเกรดเป็น supergroup → รหัสกลุ่มเปลี่ยน */
+        if (r && !r.ok && r.parameters && r.parameters.migrate_to_chat_id) {
+          chat = String(r.parameters.migrate_to_chat_id); env.setProp('TELEGRAM_CHAT_ID', chat); r = env.telegram(tok, chat, text, photo || '');
+        }
+      } catch (e) { r = { ok: false, description: (e && e.message) || String(e) }; }
+      if (r && r.ok) return true;
+      if (!env.cacheGet('tg|fail')) {
+        env.cachePut('tg|fail', '1', 600);
+        var why = String((r && r.description) || 'no response');
+        if (tok) why = why.split(tok).join('***');
+        try { env.withLock(function () { audit('telegramFail', 'system', why.slice(0, 200)); }); } catch (x) { /* */ }
+      }
+      return false;
+    }
+    function tgFlush() { var q = TGQ.splice(0, TGQ.length); q.forEach(function (m) { try { tgPost(m[0], m[1]); } catch (e) { /* */ } }); }
+    function tgSnap() { var y = addDays(env.today(), -1); return { rows: env.tail('Reports', function (r) { return String(r.date) >= y; }), alerts: activeAlerts() }; }
+    function tgStat(sn) { return currentStatus(buildIndex(sn.rows), env.today(), env.hhmm(), cfg(), alertMap(sn.alerts)); }
+    /** ทริกเกอร์ทุก 5 นาที: ก่อนเริ่มบิน 07:00 · เริ่มช่วงบิน (เฉพาะไม่ปกติ) · สรุปรายวัน 15:30 — จันทร์-ศุกร์ ส่งช่องละครั้ง/วัน */
+    function tgTick() {
+      if (!tgOn()) return 'off';
+      var today = env.today(), t = env.hhmm(), dow = new Date(isoToUTC(today)).getUTCDay();
+      if (dow === 0 || dow === 6) return 'weekend';
+      var slots = [{ k: 'pre', at: TG_PRE_AT }];
+      for (var i = 1; i < WINDOWS.length; i++) slots.push({ k: WINDOWS[i].id, at: windowStartHHMM(i) });
+      slots.push({ k: 'sum', at: TG_SUM_AT });
+      var m = minutesOf(t), due = null;
+      slots.forEach(function (x) { var a = minutesOf(x.at); if (!due && m >= a && m < a + TG_GRACE_MIN) due = x; });
+      if (!due) return 'idle';
+      var go = env.withLock(function () {
+        var sent = {};
+        try { sent = JSON.parse(env.prop('TG_SENT') || '{}') || {}; } catch (e) { sent = {}; }
+        if (sent.d !== today || !sent.s) sent = { d: today, s: {} };
+        if (sent.s[due.k]) return false;
+        sent.s[due.k] = t; env.setProp('TG_SENT', JSON.stringify(sent)); return true;
+      });
+      if (!go) return 'sent';
+      if (due.k === 'sum') {
+        var wk = addDays(today, -((dow + 6) % 7)), mo = today.slice(0, 8) + '01', from = [wk, mo, addDays(today, -1)].sort()[0];
+        var all = env.tail('Reports', function (r) { return String(r.date) >= from; }), al = activeAlerts();
+        var c = cfg(), idx = buildIndex(all), am = alertMap(al);
+        var since = function (d) { return all.filter(function (r) { return String(r.date) >= d && String(r.date) <= today; }); };
+        tgQueue(tgSummaryText({ date: today, link: tgLink(), reports: since(today), week: since(wk), month: since(mo),
+          windows: WINDOWS.map(function (w, wi) { return { label: w.label, level: levelAt(today, w.id, windowValue(idx, today, wi, c).value, c, am).level }; }) }));
+        return 'sum';
+      }
+      var st = tgStat(tgSnap());
+      if (due.k !== 'pre' && st.level === 'NORMAL') return due.k + ':normal';
+      tgQueue(tgWindowText(st, today, due.k === 'pre', tgLink()));
+      return due.k;
+    }
     /** บอร์ด Top Reporter สำหรับโหมดไม่ระบุตัวตน — เห็นชื่อจริงเฉพาะผู้ที่ติดอันดับ (เพื่อเป็นเกียรติ) */
     function anonTop(reports) {
       var um = {}; users().forEach(function (u) { if (u.active !== '0') um[u.id] = u; });
@@ -2313,6 +2469,7 @@ var WCR = (function () {
       try { wh = resolveWhen((q.report || {}).when, env.today(), env.hhmm()); } catch (e) { throw err(e.message); }
       var row = buildReport(q.report || {}, { config: cfg(), id: newId('R'), createdAt: nowIso(), date: wh.date, time: wh.time,
         reporterId: u ? u.id : '', reporterName: u ? shortName(u) : 'ไม่ระบุตัวตน', deviceId: dev, ipEnc: enc(cleanText(q.ip, 60)) });
+      var tsn = tgOn() ? tgSnap() : null, ts0 = tsn ? tgStat(tsn) : null;
       env.append('Reports', row);
       if (wh.back) audit('backdate', u ? u.id : 'anon:' + dev, row.id + ' ' + row.date + ' ' + row.time);
       var out = { row: reportOut(row), fields: REPORT_FIELDS };
@@ -2329,6 +2486,10 @@ var WCR = (function () {
           out.photo = true;
         } catch (e) { out.photoError = 'บันทึกรายงานแล้ว แต่เก็บรูปไม่สำเร็จ'; }
       }
+      if (tsn) {
+        tsn.rows.push(row); if (out.alert) tsn.alerts.push(out.alert);
+        tgQueue(tgReportText({ row: row, who: tgWho(u), back: wh.back, before: ts0, now: tgStat(tsn), link: tgLink() }), photo ? photo.split(',')[1] : '');
+      }
       return out;
     };
     /** ยกเลิก ALERT (กรณีแจ้งผิด): ATC ที่ยืนยันฐานะ + รหัส ATC หรือผู้พัฒนา */
@@ -2341,9 +2502,11 @@ var WCR = (function () {
         checkPasscode('atc', q.passHash, u.id); who = u.id;
       }
       var id = String(q.reportId || '');
-      var n = env.update('Alerts', function (a) { return a.reportId === id && !a.cancelledAt; }, function (a) { a.cancelledAt = nowIso(); a.cancelledBy = who; });
+      var gone = null;
+      var n = env.update('Alerts', function (a) { return a.reportId === id && !a.cancelledAt; }, function (a) { a.cancelledAt = nowIso(); a.cancelledBy = who; gone = a; });
       if (!n) throw err('ไม่พบ ALERT ที่ยังมีผล');
       audit('cancelAlert', who, id);
+      if (gone && tgOn()) tgQueue(tgCancelText(gone, tgStat(tgSnap())));
       return { alerts: activeAlerts() };
     };
     A.setBadgePick = function (q) {
@@ -2401,8 +2564,12 @@ var WCR = (function () {
       var ids = (q.ids || []).map(String).slice(0, 5000), set = {};
       ids.forEach(function (i) { set[i] = 1; });
       if (!ids.length) throw err('ไม่ได้เลือกรายการ');
-      var actor = shortName(u);
+      var actor = shortName(u), ts0 = tgOn() ? tgStat(tgSnap()) : null;
       var removed = env.removeRows('Reports', function (r) { return set[r.id] === 1; });
+      if (ts0 && removed.length) {
+        var ts1 = tgStat(tgSnap());
+        if (ts1.level !== ts0.level) tgQueue(tgChangeText(ts0, ts1, ['สาเหตุ: ลบรายงานที่ไม่ถูกต้อง ' + removed.length + ' รายการ'], tgLink()));
+      }
       var t = nowIso();
       removed.forEach(function (r) { r.deletedAt = t; r.deletedBy = actor; r.deleteReason = cleanText(q.reason, 200); env.append('Deleted', r); });
       audit('deleteReports', u.id, removed.length + ' rows');
@@ -2456,7 +2623,7 @@ var WCR = (function () {
           });
         })(),
         audit: env.rows('Audit').reverse().slice(0, 150),
-        passReady: { atc: !!env.prop('ATC_HASH'), del: !!env.prop('DEL_HASH') }, schema: SCHEMA, version: VERSION, retentionDays: DELETE_RETENTION_DAYS,
+        passReady: { atc: !!env.prop('ATC_HASH'), del: !!env.prop('DEL_HASH') }, telegram: tgState(), schema: SCHEMA, version: VERSION, retentionDays: DELETE_RETENTION_DAYS,
         alerts: activeAlerts(), photoCount: env.rows('ReportPhotos').length };
     };
     A.devSetConfig = function (q) {
@@ -2539,7 +2706,13 @@ var WCR = (function () {
     };
     A.devSetUser = function (q) {
       var who = devAuth(q.devToken), tokenUser = null;
+      if (q.rank !== undefined) {
+        var tu = findUser(function (x) { return x.id === q.userId; });
+        if (!tu) throw err('ไม่พบผู้ใช้');
+        if (!rankOk(q.rank, tu.gender)) throw err('คำนำหน้าชื่อไม่ถูกต้องสำหรับเพศของผู้ใช้');
+      }
       var n = env.update('Users', function (x) { return x.id === q.userId; }, function (x) {
+        if (q.rank !== undefined) x.rank = q.rank;
         if (q.active !== undefined) x.active = q.active ? '1' : '0';
         if (q.clientHash) { x.salt = env.randomHex(16); x.pwHash = pwStore(x.salt, hex64(q.clientHash)); }
         if (q.verifyRole === true) x.roleVerified = x.role;
@@ -2550,7 +2723,7 @@ var WCR = (function () {
       if (q.active === false || q.revokeDevices || q.clientHash) revokeDevices(tokenUser, null);
       bump('REV_USERS');
       audit('devSetUser', who, q.userId + (q.clientHash ? ' reset-password' : '') + (q.active !== undefined ? ' active=' + q.active : '') +
-        (q.verifyRole !== undefined ? ' verifyRole=' + q.verifyRole : '') + (q.revokeDevices ? ' revoke' : ''));
+        (q.verifyRole !== undefined ? ' verifyRole=' + q.verifyRole : '') + (q.revokeDevices ? ' revoke' : '') + (q.rank !== undefined ? ' rank=' + q.rank : ''));
       return {};
     };
 
@@ -2621,8 +2794,10 @@ var WCR = (function () {
         var fn = own.call(A, act) ? A[act] : null;
         if (typeof fn !== 'function') throw err('ไม่รู้จักคำสั่ง ' + cleanText(act, 40));
         var res = own.call(READ_ACTIONS, act) ? fn(req) : env.withLock(function () { return fn(req); });
+        tgFlush();
         res = res || {}; res.ok = true; return res;
       } catch (e) {
+        TGQ.length = 0;
         /* ข้อความของระบบเอง (ภาษาไทย / มีรหัส) ส่งให้ผู้ใช้ได้ · ข้อผิดพลาดภายในส่งเป็นข้อความทั่วไป แล้วบันทึกฝั่งเซิร์ฟเวอร์ */
         var msg = (e && e.message) || String(e), mine = !!(e && e.code) || /[\u0E00-\u0E7F]/.test(msg);
         if (!mine && env.log) { try { env.log('handle ' + String((req && req.action) || '') + ': ' + msg); } catch (x) { /* */ } }
@@ -2631,12 +2806,14 @@ var WCR = (function () {
       }
     }
     return { handle: handle, enc: enc, dec: dec, maintenance: function () { return env.withLock(maintenance); },
-      importRows: function (list) { return env.withLock(function () { return importRows(list); }); } };
+      importRows: function (list) { return env.withLock(function () { return importRows(list); }); },
+      telegramTick: function () { var r = tgTick(); tgFlush(); return r; },
+      telegramSend: function (text) { return tgPost(text, ''); } };
   }
 
   return {
     VERSION: VERSION, SCHEMA: SCHEMA, PBKDF2_ITER: PBKDF2_ITER, POW_BITS: POW_BITS, DELETE_RETENTION_DAYS: DELETE_RETENTION_DAYS,
-    RANKS: RANKS, ROLES: ROLES, ROLE_TH: ROLE_TH, ALTITUDES: ALTITUDES, SIZE_LABEL: SIZE_LABEL, SIZE_DESC: SIZE_DESC, MAX_QTY: MAX_QTY,
+    RANKS: RANKS, TG_LINK: TG_LINK, ROLES: ROLES, ROLE_TH: ROLE_TH, ALTITUDES: ALTITUDES, SIZE_LABEL: SIZE_LABEL, SIZE_DESC: SIZE_DESC, MAX_QTY: MAX_QTY,
     LEVEL_TH: LEVEL_TH, LEVEL_COLOR: LEVEL_COLOR, CAT_TH: CAT_TH, sizeText: sizeText, groundOnly: groundOnly, AERO: AERO, distKm: distKm,
     SPEC_BADGES: SPEC_BADGES, badgesEarned: badgesEarned, shownBadge: shownBadge, droneCounts: droneCounts,
     alertWindows: alertWindows, resolveWhen: resolveWhen, BACKDATE_DAYS: BACKDATE_DAYS, alertMap: alertMap, levelAt: levelAt, PHOTO_KEEP_DAYS: PHOTO_KEEP_DAYS, historyConvert: historyConvert,
@@ -2646,7 +2823,8 @@ var WCR = (function () {
     CIRCUIT_LEGS: CIRCUIT_LEGS, RP_POINTS: RP_POINTS, TRAIN_PRIMARY: TRAIN_PRIMARY, TRAIN_ADVANCED: TRAIN_ADVANCED,
     combineTraining: combineTraining, trainingMembers: trainingMembers, circuitSegment: circuitSegment, circuitView: circuitView,
     parseLoc: parseLoc, groupMult: groupMult, sizeValue: sizeValue, computeScore: computeScore, buildReport: buildReport, round2: round2,
-    rankText: rankText, shortName: shortName, fullName: fullName, titledName: titledName, ranksFor: ranksFor, rankOk: rankOk, rankIndex: rankIndex, compareUsers: compareUsers, CIVIL_TITLE: CIVIL_TITLE, isTrue: isTrue, validateProfile: validateProfile,
+    rankText: rankText, shortName: shortName, fullName: fullName, titledName: titledName, ranksFor: ranksFor, rankOk: rankOk, rankIndex: rankIndex, compareUsers: compareUsers, CIVIL_TITLE: CIVIL_TITLE, NO_TITLE: NO_TITLE, isTrue: isTrue,
+    tgReportText: tgReportText, tgChangeText: tgChangeText, tgWindowText: tgWindowText, tgSummaryText: tgSummaryText, tgCancelText: tgCancelText, tgWho: tgWho, validateProfile: validateProfile,
     USERNAME_RE: USERNAME_RE, SP_RE: SP_RE, PIT_RE: PIT_RE, THAI_RE: THAI_RE,
     BADGES: BADGES, badgeFor: badgeFor, nextBadge: nextBadge,
     addDays: addDays, dow: dow, mondayOf: mondayOf, addMonths: addMonths, lastDay: lastDay, fiscalYear: fiscalYear,
@@ -5111,7 +5289,7 @@ function bindPhotoPicker(m, onPick) {
 }
 
 /** ตัวเลือกคำนำหน้าชื่อตามเพศ (หญิง: ยศทหารต่อท้าย "หญิง") */
-function rankOpts(g, cur) { return W.ranksFor(g).map(r => `<option value="${esc(r)}" ${cur === r ? 'selected' : ''}>${esc(W.rankText({ rank: r, gender: g }))}</option>`).join(''); }
+function rankOpts(g, cur) { return W.ranksFor(g).map(r => `<option value="${esc(r)}" ${cur === r ? 'selected' : ''}>${r === W.NO_TITLE ? 'ไม่มีคำนำหน้าชื่อ' : esc(W.rankText({ rank: r, gender: g }))}</option>`).join(''); }
 function profileFields(p) {
   p = p || {};
   const rk = rankOpts(p.gender, p.rank);
@@ -5549,7 +5727,7 @@ function devTab(m) {
       <td class="nw">${u.lastReport ? esc(u.lastReport) + ` <small class="hint">(${fmt(u.reportCount)} รายงาน)</small>` : '<span class="hint">ยังไม่เคยรายงาน</span>'}</td><td>${stat(u)}</td>
       <td><div class="row">${(u.role === 'ATC' || u.role === 'IP') ? `<button class="btn sm ${u.roleVerified ? '' : 'pri'}" type="button" data-uv="${u.id}" data-on="${u.roleVerified ? 0 : 1}">${u.roleVerified ? 'ถอนการยืนยัน' : 'ยืนยันฐานะ'}</button>` : ''}
         <button class="btn sm" type="button" data-ua="${u.id}" data-on="${u.active ? 0 : 1}">${u.active ? 'ระงับ' : 'เปิดใช้'}</button>
-        <button class="btn sm" type="button" data-ur="${u.id}">ตั้งรหัสชั่วคราว</button><button class="btn sm" type="button" data-ux="${u.id}">ออกจากระบบทุกเครื่อง</button>
+        <button class="btn sm" type="button" data-uk="${u.id}">คำนำหน้าชื่อ</button><button class="btn sm" type="button" data-ur="${u.id}">ตั้งรหัสชั่วคราว</button><button class="btn sm" type="button" data-ux="${u.id}">ออกจากระบบทุกเครื่อง</button>
         ${u.inactive ? `<button class="btn sm dng" type="button" data-ud="${u.id}">${ic('trash')}ลบบัญชีถาวร</button>` : u.newSignup ? `<button class="btn sm dng" type="button" data-uj="${u.id}">${ic('trash')}ลบการสมัคร</button>` : ''}</div></td></tr>`;
     const table = us => `<div class="scroll"><table class="stack"><thead><tr><th>ชื่อ</th><th>Username</th><th>รุ่น / รายละเอียด</th><th>สมัครเมื่อ</th><th>รายงานล่าสุด</th><th>สถานะ</th><th></th></tr></thead><tbody>${us.map(row).join('')}</tbody></table></div>`;
     const sections = ROLE_ORDER.map(([role, en, th]) => {
@@ -5586,6 +5764,18 @@ function devTab(m) {
       if (a) return call({ userId: a.dataset.ua, active: a.dataset.on === '1' }, 'อัปเดตผู้ใช้แล้ว');
       if (v) return call({ userId: v.dataset.uv, verifyRole: v.dataset.on === '1' }, v.dataset.on === '1' ? 'ยืนยันฐานะแล้ว' : 'ถอนการยืนยันแล้ว');
       if (x) return call({ userId: x.dataset.ux, revokeDevices: true }, 'ออกจากระบบทุกเครื่องแล้ว');
+      const rk = e.target.closest('[data-uk]');
+      if (rk) { /* แก้คำนำหน้าชื่อ (เช่น บัญชีกลางของหน่วย = ไม่มีคำนำหน้าชื่อ) */
+        const u = d.users.find(z => z.id === rk.dataset.uk); if (!u) return;
+        const c = modal({ title: 'แก้คำนำหน้าชื่อ', body: `<p><b>${esc(W.fullName(u))}</b> (${esc(u.nickname)}) · <span class="mono">${esc(u.username)}</span> · ${u.gender === 'F' ? 'หญิง' : 'ชาย'}</p>
+          <label class="f" for="ukSel">คำนำหน้าชื่อ</label><select class="in" id="ukSel">${rankOpts(u.gender, u.rank)}</select>
+          <p class="box" style="margin-top:12px">จะแสดงเป็น: <b id="ukPrev"></b></p>`,
+          foot: `<button class="btn" type="button" data-close>ยกเลิก</button><button class="btn pri" type="button" id="ukOk">บันทึก</button>` });
+        const pv = () => { c.q('#ukPrev').textContent = W.fullName(Object.assign({}, u, { rank: c.q('#ukSel').value })); };
+        c.q('#ukSel').onchange = pv; pv();
+        c.q('#ukOk').onclick = async () => { busy(c.q('#ukOk'), true); const rank = c.q('#ukSel').value; c.close(); await call({ userId: u.id, rank }, 'แก้คำนำหน้าชื่อแล้ว'); };
+        return;
+      }
       if (rj) { /* ลบการสมัครใหม่ที่ข้อมูลไม่ถูกต้อง */
         const u = d.users.find(z => z.id === rj.dataset.uj); if (!u) return;
         const c = modal({ title: 'ลบการสมัคร', body: `<p>ลบการสมัครของ <b>${esc(W.fullName(u))}</b> (${esc(u.nickname)}) · ${esc(W.ROLES[u.role] || '')} · <span class="mono">${esc(u.username)}</span></p>
@@ -5620,7 +5810,7 @@ function devTab(m) {
       }
     };
   } else if (t === 'aud') {
-    box.innerHTML = `<p class="hint">KPS-WCR v${esc(d.version)} · schema ${d.schema} · โหมด ${API.mode}</p><div class="scroll"><table><thead><tr><th>เวลา</th><th>การกระทำ</th><th>ผู้ทำ</th><th>รายละเอียด</th></tr></thead><tbody>
+    box.innerHTML = `<p class="hint">KPS-WCR v${esc(d.version)} · schema ${d.schema} · โหมด ${API.mode} · Telegram: ${({ on: 'เชื่อมต่อแล้ว', off: 'ปิดอยู่', unset: 'ยังไม่ได้ตั้งค่า', none: 'ไม่รองรับในโหมดนี้' })[d.telegram] || '-'}</p><div class="scroll"><table><thead><tr><th>เวลา</th><th>การกระทำ</th><th>ผู้ทำ</th><th>รายละเอียด</th></tr></thead><tbody>
       ${d.audit.map(a => `<tr><td class="nw">${esc(String(a.time).slice(0, 19).replace('T', ' '))}</td><td>${esc(a.action)}</td><td class="mono">${esc(a.actor)}</td><td class="mono">${esc(a.detail)}</td></tr>`).join('') || '<tr><td colspan="4" class="hint">ไม่มี</td></tr>'}</tbody></table></div>`;
   }
 }
